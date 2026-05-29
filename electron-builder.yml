@@ -1,0 +1,33 @@
+appId: com.novel-ai-writer.app
+productName: AI小说写作
+copyright: Copyright © 2026
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - node_modules/**/*
+  - package.json
+
+extraResources:
+  - from: node_modules/sql.js/dist
+    to: sql.js
+    filter:
+      - "*.wasm"
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: resources/icon.png
+
+npmRebuild: false
+
+asar: true
+asarUnpack:
+  - "node_modules/sql.js/**"
+  - "node_modules/pdf-parse/**"
+  - "node_modules/mammoth/**"

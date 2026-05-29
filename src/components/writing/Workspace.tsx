@@ -1,0 +1,1066 @@
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { showToast } from '../common/Toast'
+import DeslopPanel from './DeslopPanel'
+import {
+  PREPARE_SYSTEM, PREPARE_USER,
+  OUTLINE_SYSTEM, OUTLINE_USER,
+  VOLUME_OUTLINE_SYSTEM, VOLUME_OUTLINE_USER,
+  DETAIL_OUTLINE_SYSTEM, DETAIL_OUTLINE_USER,
+  CHAPTER_SYSTEM, CHAPTER_USER,
+  CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
+} from '../../services/generator'
+import type { NovelProject, Chapter, StyleLibrary } from '../../types'
+import type { DisassemblyProject } from '../../store/disassemblyStore'
+
+// ===== 类型 =====
+interface Volume {
+  volume_number: number; title: string; summary: string
+  chapter_range: [number, number]; theme: string; key_events: string[]
+}
+interface ChapterPlan {
+  chapter_number: number; title: string; summary: string
+  characters: string[]; key_events: string[]
+  estimated_words: number; emotional_goal?: string
+  function?: string; ending_type?: string
+}
+
+// ===== 构建引用上下文 =====
+function buildRefContext(
+  primaryStyleId: number | null, auxiliaryStyleIds: number[],
+  disassemblyIds: number[], styleLibraries: StyleLibrary[],
+  disassemblies: DisassemblyProject[]
+) {
+  let styleContext = '', disassemblyContext = ''
+  const ids = [primaryStyleId, ...auxiliaryStyleIds].filter(Boolean) as number[]
+  const styles = styleLibraries.filter(l => ids.includes(l.id))
+  if (styles.length) {
+    styleContext = styles.map((s, i) => {
+      const p = s.style_profile
+      return `${s.id === primaryStyleId ? '【主风格】' : '【辅风格】'}${s.name}
+叙事：${p?.writing_style?.narrative_perspective || ''}
+句式：${p?.writing_style?.sentence_characteristics || ''}
+语言：${p?.language_features?.vocabulary_preference || ''}
+氛围：${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}
+${p?.raw_analysis?.slice(0, 300) || ''}`
+    }).join('\n\n')
+  }
+  const diss = disassemblies.filter(d => disassemblyIds.includes(d.id))
+  if (diss.length) {
+    disassemblyContext = diss.map(d => {
+      const r = JSON.parse(d.stage_results || '{}')
+      return `【参考书】${d.name}\n${[r.stage0, r.stage1, r.stage4].filter(Boolean).join('\n').slice(0, 1000)}`
+    }).join('\n\n---\n\n')
+  }
+  return { styleContext, disassemblyContext }
+}
+
+export default function Workspace() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+
+  // 核心数据
+  const [project, setProject] = useState<NovelProject | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [prepareContent, setPrepareContent] = useState('')
+  const [outlineContent, setOutlineContent] = useState('')
+  const [volumes, setVolumes] = useState<Volume[]>([])
+  const [chapterPlans, setChapterPlans] = useState<ChapterPlan[]>([])
+  const [chapters, setChapters] = useState<Chapter[]>([])
+  const [plotSummary, setPlotSummary] = useState('')
+
+  // UI 状态
+  const [selectedChapter, setSelectedChapter] = useState<number>(1)
+  const [editingContent, setEditingContent] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genTarget, setGenTarget] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'review'>('outline')
+  const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
+  const [reviewResult, setReviewResult] = useState('')
+
+  // 引用
+  const [primaryStyleId, setPrimaryStyleId] = useState<number | null>(null)
+  const [auxiliaryStyleIds, setAuxiliaryStyleIds] = useState<number[]>([])
+  const [disassemblyIds, setDisassemblyIds] = useState<number[]>([])
+  const [styleLibraries, setStyleLibraries] = useState<StyleLibrary[]>([])
+  const [disassemblies, setDisassemblies] = useState<DisassemblyProject[]>([])
+
+  // 导出
+  const [showExport, setShowExport] = useState(false)
+
+  // ========== 加载 ==========
+  const loadAll = useCallback(async () => {
+    try {
+      if (!window.electronAPI) { setLoaded(true); return }
+      const proj = await window.electronAPI.db.get('SELECT * FROM novel_projects WHERE id = ?', [Number(id)])
+      if (!proj) { showToast('error', '项目不存在'); navigate('/'); return }
+      setProject(proj)
+
+      const prep = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`prepare_${id}`])
+      if (prep) setPrepareContent(prep.value)
+
+      const outl = await window.electronAPI.db.get('SELECT content FROM outlines WHERE project_id = ?', [Number(id)])
+      if (outl) setOutlineContent(outl.content)
+
+      // 加载卷纲
+      const volRow = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`volumes_${id}`])
+      if (volRow) { try { setVolumes(JSON.parse(volRow.value)) } catch {} }
+
+      // 加载细纲
+      const det = await window.electronAPI.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+      if (det) setChapterPlans(JSON.parse(det.chapters))
+
+      const chRows = await window.electronAPI.db.query('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_number', [Number(id)])
+      setChapters(chRows)
+
+      const ctx = await window.electronAPI.db.get('SELECT * FROM context_state WHERE project_id = ?', [Number(id)])
+      if (ctx) setPlotSummary(ctx.plot_summary || '')
+
+      if (proj.primary_style_id) setPrimaryStyleId(proj.primary_style_id)
+      try { setAuxiliaryStyleIds(JSON.parse(proj.auxiliary_style_ids || '[]')) } catch {}
+      const libs = await window.electronAPI.db.query('SELECT * FROM style_libraries ORDER BY created_at DESC')
+      setStyleLibraries(libs.map((l: any) => ({ ...l, style_profile: typeof l.style_profile === 'string' ? JSON.parse(l.style_profile) : l.style_profile })))
+      const diss = await window.electronAPI.db.query('SELECT * FROM disassembly_projects ORDER BY updated_at DESC')
+      setDisassemblies(diss)
+
+      // 恢复上次章节
+      const lastCh = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`workspace_ch_${id}`])
+      if (lastCh) setSelectedChapter(Number(lastCh.value))
+
+      // 加载当前章节内容
+      const curCh = chRows.find((c: Chapter) => c.chapter_number === (lastCh ? Number(lastCh.value) : 1))
+      if (curCh) setEditingContent(curCh.content || '')
+    } catch { showToast('error', '加载失败') }
+    setLoaded(true)
+  }, [id])
+
+  useEffect(() => { loadAll() }, [loadAll])
+
+  // 切换章节
+  const switchChapter = async (num: number) => {
+    setSelectedChapter(num)
+    const ch = chapters.find(c => c.chapter_number === num)
+    setEditingContent(ch?.content || '')
+    if (window.electronAPI) {
+      await window.electronAPI.settings.set(`workspace_ch_${id}`, String(num))
+    }
+  }
+
+  // ========== 保存 ==========
+  const saveChapter = async (num: number, title: string, content: string) => {
+    if (!window.electronAPI) return
+    const ex = chapters.find(c => c.chapter_number === num)
+    ex
+      ? await window.electronAPI.db.run("UPDATE chapters SET title=?, content=?, word_count=?, status='edited', updated_at=datetime('now','localtime') WHERE id=?", [title, content, content.length, ex.id])
+      : await window.electronAPI.db.run("INSERT INTO chapters (project_id, chapter_number, title, content, word_count, status) VALUES (?,?,?,?,?,'generated')", [Number(id), num, title, content, content.length])
+    await loadAll()
+  }
+
+  const saveOutline = async (content: string) => {
+    if (!window.electronAPI) return
+    const ex = await window.electronAPI.db.get('SELECT id FROM outlines WHERE project_id=?', [Number(id)])
+    ex
+      ? await window.electronAPI.db.run("UPDATE outlines SET content=?, updated_at=datetime('now','localtime') WHERE project_id=?", [content, Number(id)])
+      : await window.electronAPI.db.run('INSERT INTO outlines (project_id,content) VALUES (?,?)', [Number(id), content])
+    setOutlineContent(content)
+  }
+
+  const saveVolumes = async (vols: Volume[]) => {
+    if (!window.electronAPI) return
+    await window.electronAPI.settings.set(`volumes_${id}`, JSON.stringify(vols))
+    setVolumes(vols)
+  }
+
+  const saveChapterPlans = async (plans: ChapterPlan[]) => {
+    if (!window.electronAPI) return
+    const ex = await window.electronAPI.db.get('SELECT id FROM detailed_outlines WHERE project_id=?', [Number(id)])
+    ex
+      ? await window.electronAPI.db.run("UPDATE detailed_outlines SET chapters=?, updated_at=datetime('now','localtime') WHERE project_id=?", [JSON.stringify(plans), Number(id)])
+      : await window.electronAPI.db.run('INSERT INTO detailed_outlines (project_id,chapters) VALUES (?,?)', [Number(id), JSON.stringify(plans)])
+    setChapterPlans(plans)
+  }
+
+  const updateContext = async (chapNum: number, newContent: string) => {
+    try {
+      if (!window.electronAPI) return
+      const ctx = await window.electronAPI.db.get('SELECT * FROM context_state WHERE project_id = ?', [Number(id)])
+      const prevCharState = ctx?.character_state || '{}'
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: CONTEXT_UPDATE_SYSTEM },
+        { role: 'user', content: CONTEXT_UPDATE_USER(prevCharState, plotSummary, newContent) },
+      ], '上下文更新')
+      const jm = reply.match(/\{[\s\S]*\}/)
+      if (jm) {
+        const p = JSON.parse(jm[0])
+        const ncs = JSON.stringify(p.character_state || {})
+        const nps = p.plot_summary || ''
+        ctx
+          ? await window.electronAPI.db.run("UPDATE context_state SET character_state=?, plot_summary=?, last_chapter=?, updated_at=datetime('now','localtime') WHERE project_id=?", [ncs, nps, chapNum, Number(id)])
+          : await window.electronAPI.db.run('INSERT INTO context_state (project_id, character_state, plot_summary, last_chapter) VALUES (?,?,?,?)', [Number(id), ncs, nps, chapNum])
+        setPlotSummary(nps)
+      }
+    } catch {}
+  }
+
+  // ========== 生成逻辑（层级依赖） ==========
+
+  const getRefs = () => buildRefContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
+
+  /** 弹出生成配置后生成 */
+  const startGenWithConfig = (title: string, desc: string, callback: (config: any) => Promise<void>) => {
+    showToast('info', '弹出选择窗口...')
+    setGenConfig({ open: true, title, desc, onConfirm: async (c) => { setGenConfig(prev => ({ ...prev, open: false })); await callback(c) } })
+  }
+
+  /** 生成大纲 — 读：准备+风格+拆文 */
+  // 生成面板显示状态
+  const [showGenPanel, setShowGenPanel] = useState<'outline' | 'chapter' | 'volumes' | null>(null)
+  const [genHint, setGenHint] = useState('')
+
+  const genOutline = async (config?: any, hint?: string) => {
+    if (!project || !window.electronAPI) return
+    setShowGenPanel(null); setGenHint('')
+    setGenerating(true); setGenTarget('大纲')
+    try {
+      const { styleContext, disassemblyContext } = config
+        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
+        : getRefs()
+      const userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext)
+        + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: OUTLINE_SYSTEM },
+        { role: 'user', content: userPrompt },
+      ], '大纲生成')
+      await saveOutline(reply)
+      showToast('success', '大纲已生成')
+    } catch (e: any) { showToast('error', '大纲生成失败：' + e.message) }
+    finally { setGenerating(false); setGenTarget('') }
+  }
+
+  // 确认生成（使用当前选择的引用）
+  const confirmGen = () => {
+    const config = { primaryStyleId, auxIds: auxiliaryStyleIds, dissIds: disassemblyIds }
+    if (showGenPanel === 'outline') genOutline(config, genHint)
+    else if (showGenPanel === 'volumes') genVolumes()
+    else if (showGenPanel === 'chapter') genChapter(selectedChapter, config, genHint)
+  }
+
+  /** 生成卷纲 — 读：大纲+风格+拆文 */
+  const genVolumes = async () => {
+    if (!outlineContent) { showToast('error', '请先生成大纲'); return }
+    if (!window.electronAPI) return
+    const total = chapterPlans.length || 40
+    const { styleContext, disassemblyContext } = getRefs()
+    const enrichedOutline = outlineContent + (styleContext ? '\n\n【风格】\n' + styleContext : '') + (disassemblyContext ? '\n\n【拆文】\n' + disassemblyContext : '')
+    const reply = await window.electronAPI.aiChat([
+      { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
+      { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total) },
+    ], '卷纲生成')
+    const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\[[\s\S]*\]/)
+    const vols = JSON.parse(jm ? (jm[1] || jm[0]) : reply)
+    await saveVolumes(vols)
+    showToast('success', `卷纲完成！共 ${vols.length} 卷`)
+  }
+
+  /** 生成某一章的细纲 — 读：大纲+所在卷纲+上一章细纲(如有)+风格+拆文 */
+  const genSingleChapterPlan = async (chapNum: number) => {
+    if (!outlineContent) { showToast('error', '请先生成大纲'); return }
+    if (!window.electronAPI) return
+    const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+    if (!vol) { showToast('error', `第${chapNum}章不属于任何卷，请先调整卷纲`); return }
+
+    setGenerating(true)
+    try {
+      const { styleContext, disassemblyContext } = getRefs()
+      const isFirstChapterInBook = chapNum === 1
+      const isFirstChapterInVol = chapNum === vol.chapter_range[0]
+
+      // 上一章细纲：只在非全书第一章时读取
+      const prevPlan = isFirstChapterInBook ? null : chapterPlans.find(p => p.chapter_number === chapNum - 1)
+
+      const volContext = `【所在卷】第${vol.volume_number}卷《${vol.title}》
+概要：${vol.summary} | 主题：${vol.theme}
+章节范围：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`
+
+      const prevContext = isFirstChapterInBook
+        ? '（全书第一章，无前章）'
+        : isFirstChapterInVol
+          ? '（本卷第一章，请基于大纲和卷纲直接设计开篇，不需要依赖前一章细纲）'
+          : prevPlan
+            ? `【上一章细纲】第${prevPlan.chapter_number}章 ${prevPlan.title}\n概要：${prevPlan.summary}\n人物：${prevPlan.characters.join('、')}\n事件：${prevPlan.key_events.join('、')}`
+            : '（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）'
+
+      const promptParts = [
+        outlineContent.slice(0, 1500),
+        volContext,
+        prevContext,
+        styleContext ? '【风格】\n' + styleContext : '',
+        disassemblyContext ? '【拆文】\n' + disassemblyContext.slice(0, 1000) : '',
+      ].filter(Boolean)
+
+      const reply = await window.electronAPI.aiChat([
+        {
+          role: 'system',
+          content: `你是章节细纲规划师。只规划第 ${chapNum} 章。${isFirstChapterInBook ? '这是全书第一章（黄金首章），需要：强力钩子+快速建立主角+展示核心冲突。' : isFirstChapterInVol ? '这是新一卷的开篇章节，需要：新卷氛围建立+承上启下的过渡+保持读者期待。' : '请基于上一章细纲连贯设计本章。'}一章的细纲包含字段：chapter_number(数字)、title(章节标题5-15字)、function(功能标签：🎣钩子/⚡爽点/📖展开/💡转折/🌿支线/🏗建立/🌊过渡)、summary(内容概要50-100字)、characters(出场人物数组)、key_events(关键事件数组2-4个)、emotional_goal(情绪目标简短描述)、estimated_words(预估字数数字)、ending_type(结尾类型：悬念/爽点释放/情感余味/自然过渡)。输出严格的JSON对象，不要数组，不要markdown代码块。`
+        },
+        { role: 'user', content: promptParts.join('\n\n') + `\n\n请输出第 ${chapNum} 章的细纲JSON对象。` },
+      ], `细纲-第${chapNum}章`)
+
+      // 尝试多种方式提取 JSON
+      let newPlan: ChapterPlan
+      try {
+        const jm = reply.match(/\{[\s\S]*\}/)
+        newPlan = JSON.parse(jm ? jm[0] : reply)
+      } catch {
+        // 如果AI没返回有效JSON，创建一个基础细纲
+        newPlan = {
+          chapter_number: chapNum,
+          title: `第${chapNum}章`,
+          summary: reply.slice(0, 200),
+          characters: [],
+          key_events: [],
+          estimated_words: 3000,
+          emotional_goal: '',
+          function: '📖 展开',
+          ending_type: '自然收尾',
+        }
+      }
+      newPlan.chapter_number = chapNum
+
+      const merged = chapterPlans.filter(p => p.chapter_number !== chapNum)
+      merged.push(newPlan)
+      merged.sort((a, b) => a.chapter_number - b.chapter_number)
+      await saveChapterPlans(merged)
+      showToast('success', `第${chapNum}章细纲已生成：${newPlan.title}`)
+    } catch (e: any) {
+      showToast('error', `第${chapNum}章细纲生成失败：${e.message || '未知错误'}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  /** 生成某一章正文 — 读：大纲+所在卷纲+本章细纲+上一章正文+人物状态+情节+风格+拆文 */
+  const genChapter = async (chapNum: number, config?: any, hint?: string) => {
+    if (!project || !window.electronAPI) return
+    const plan = chapterPlans.find(p => p.chapter_number === chapNum)
+    if (!plan) { showToast('error', '该章尚无细纲，请先生成对应卷的细纲'); return }
+
+    setShowGenPanel(null); setGenHint('')
+    setGenerating(true); setGenTarget(`第${chapNum}章`)
+    try {
+      const { styleContext, disassemblyContext } = config
+        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
+        : getRefs()
+
+      // 找所在卷
+      const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+      const volContext = vol ? `【所在卷】第${vol.volume_number}卷《${vol.title}》\n概要：${vol.summary}\n主题：${vol.theme}` : ''
+
+      // 上一章
+      const prevCh = chapters.find(c => c.chapter_number === chapNum - 1)
+      const prevExcerpt = prevCh?.content?.slice(-300) || ''
+
+      // 人物状态
+      let charState = '{}'
+      try {
+        const ctx = await window.electronAPI.db.get('SELECT character_state FROM context_state WHERE project_id = ?', [Number(id)])
+        if (ctx) charState = ctx.character_state
+      } catch {}
+
+      const planAny = plan as any
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: CHAPTER_SYSTEM },
+        { role: 'user', content: CHAPTER_USER(
+          project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
+          plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
+          planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
+          styleContext, plotSummary, charState, prevExcerpt,
+          disassemblyContext + '\n\n' + volContext
+        ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')},
+      ], '章节生成')
+      setEditingContent(reply)
+      await saveChapter(chapNum, plan.title, reply)
+      await updateContext(chapNum, reply)
+      showToast('success', `第${chapNum}章生成完成`)
+    } catch (e: any) { showToast('error', '生成失败：' + e.message) }
+    finally { setGenerating(false); setGenTarget('') }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
+    await saveChapter(selectedChapter, plan?.title || `第${selectedChapter}章`, editingContent)
+    setSaving(false)
+    showToast('success', '已保存')
+  }
+
+  // 删除章节（包括正文和细纲）
+  const deleteChapter = async (chapNum: number) => {
+    const ch = chapters.find(c => c.chapter_number === chapNum)
+    const plan = chapterPlans.find(p => p.chapter_number === chapNum)
+    const label = ch ? `第 ${chapNum} 章「${ch.title}」` : plan ? `第 ${chapNum} 章细纲「${plan.title}」` : `第 ${chapNum} 章`
+    if (!window.confirm(`确定删除${label}吗？此操作不可恢复。`)) return
+    try {
+      if (window.electronAPI) {
+        if (ch) await window.electronAPI.db.run('DELETE FROM chapters WHERE id = ?', [ch.id])
+        const newPlans = chapterPlans.filter(p => p.chapter_number !== chapNum)
+        await saveChapterPlans(newPlans)
+        await loadAll()
+        showToast('success', `${label}已删除`)
+        if (selectedChapter === chapNum) {
+          setEditingContent('')
+          if (newPlans.length > 0) switchChapter(newPlans[0].chapter_number)
+        }
+      }
+    } catch { showToast('error', '删除失败') }
+  }
+
+  // 新建章节（加到末尾）
+  const addChapter = async () => {
+    const maxNum = chapterPlans.length > 0 ? Math.max(...chapterPlans.map(p => p.chapter_number)) : 0
+    const newPlan: ChapterPlan = {
+      chapter_number: maxNum + 1,
+      title: `第${maxNum + 1}章`,
+      summary: '',
+      characters: [],
+      key_events: [],
+      estimated_words: 3000,
+      emotional_goal: '',
+      function: '📖 展开',
+      ending_type: '自然收尾',
+    }
+    const newPlans = [...chapterPlans, newPlan].sort((a, b) => a.chapter_number - b.chapter_number)
+    // 重新编号
+    const renumbered = newPlans.map((p, i) => ({ ...p, chapter_number: i + 1 }))
+    await saveChapterPlans(renumbered)
+    await loadAll()
+    showToast('success', `已添加：第${maxNum + 1}章`)
+  }
+
+  // 删除卷
+  const deleteVolume = async (volNum: number) => {
+    const vol = volumes.find(v => v.volume_number === volNum)
+    if (!vol) return
+    if (!window.confirm(`确定删除「${vol.title}」吗？卷内章节细纲不会被删除。`)) return
+    const newVols = volumes.filter(v => v.volume_number !== volNum).map((v, i) => ({ ...v, volume_number: i + 1 }))
+    await saveVolumes(newVols)
+    showToast('success', `已删除「${vol.title}」`)
+  }
+
+  // 新建卷
+  const addVolume = async () => {
+    const maxNum = volumes.length > 0 ? Math.max(...volumes.map(v => v.volume_number)) : 0
+    const lastVol = volumes.find(v => v.volume_number === maxNum)
+    const start = lastVol ? lastVol.chapter_range[1] + 1 : 1
+    const end = start + 7
+    const newVol: Volume = {
+      volume_number: maxNum + 1,
+      title: `第${maxNum + 1}卷`,
+      summary: '',
+      chapter_range: [start, end],
+      theme: '',
+      key_events: [],
+    }
+    const newVols = [...volumes, newVol]
+    await saveVolumes(newVols)
+    showToast('success', `已添加：第${maxNum + 1}卷`)
+  }
+
+  // 拖拽移动章节到指定卷
+  const moveChapterToVolume = (chapNum: number, targetVolNum: number) => {
+    const newVols = volumes.map(v => ({ ...v }))
+    // 从原卷移出：调整原卷的 chapter_range
+    const oldVol = newVols.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+    const targetVol = newVols.find(v => v.volume_number === targetVolNum)
+    if (!targetVol || !oldVol) return
+
+    if (oldVol.volume_number === targetVolNum) return // 同卷不移动
+
+    // 缩小原卷范围
+    if (oldVol.chapter_range[0] === chapNum) oldVol.chapter_range[0]++
+    else if (oldVol.chapter_range[1] === chapNum) oldVol.chapter_range[1]--
+    else {
+      // 章节在中间，拆分为两个卷（简化：只调整范围）
+      // 这里简单处理：从原卷移除，放到目标卷末尾
+    }
+
+    // 扩大目标卷范围
+    targetVol.chapter_range[1] = Math.max(targetVol.chapter_range[1], chapNum)
+    targetVol.chapter_range[0] = Math.min(targetVol.chapter_range[0], chapNum)
+
+    // 重排序所有卷的 chapter_range
+    const sorted = newVols.sort((a, b) => a.chapter_range[0] - b.chapter_range[0])
+    sorted.forEach((v, i) => {
+      v.volume_number = i + 1
+    })
+
+    saveVolumes(sorted)
+    showToast('success', `第${chapNum}章已移至第${targetVolNum}卷`)
+    loadAll()
+  }
+
+  // 拖拽状态
+  const [dragChapter, setDragChapter] = useState<number | null>(null)
+
+  // 全屏查看大纲/细纲
+  const [fullView, setFullView] = useState<{ title: string; content: string } | null>(null)
+
+  // 生成配置弹窗
+  const [genConfig, setGenConfig] = useState<{
+    open: boolean; title: string; desc: string; onConfirm: (c: any) => void
+  }>({ open: false, title: '', desc: '', onConfirm: () => {} })
+
+  // 重命名
+  const [renaming, setRenaming] = useState(false)
+  const [renameText, setRenameText] = useState('')
+  const startRename = () => { setRenameText(project?.title || ''); setRenaming(true) }
+  const confirmRename = async () => {
+    if (!renameText.trim() || !project || !window.electronAPI) { setRenaming(false); return }
+    await window.electronAPI.db.run('UPDATE novel_projects SET title=?, updated_at=datetime("now","localtime") WHERE id=?', [renameText.trim(), project.id])
+    setProject({ ...project, title: renameText.trim() })
+    setRenaming(false)
+    showToast('success', '书名已更新')
+  }
+
+  // 面板宽度
+  const [leftWidth, setLeftWidth] = useState(192)
+  const [rightWidth, setRightWidth] = useState(288)
+
+  // ========== 校对 ==========
+  const handleReview = async () => {
+    if (!window.electronAPI || chapters.length < 2) { showToast('error', '至少需要2章才能校对'); return }
+    setReviewResult('')
+    try {
+      const summary = chapters.map(ch =>
+        `第${ch.chapter_number}章：${ch.title}\n${ch.content.slice(0, 200)}...`
+      ).join('\n\n')
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: `你是小说一致性校对员。检查以下问题并给出报告：
+1. 人物一致性（名字、性格、关系是否前后矛盾）
+2. 情节连贯性（是否有跳跃或矛盾）
+3. 时间线（是否合理）
+4. 伏笔追踪（埋了哪些、收了哪些）
+5. 设定一致性（世界观规则是否前后矛盾）
+输出简洁的 Markdown 报告。` },
+        { role: 'user', content: `全书章节摘要：\n${summary}\n\n大纲：\n${outlineContent.slice(0, 1000)}\n\n请进行校对。` },
+      ], '校对检查')
+      setReviewResult(reply)
+    } catch (e: any) { showToast('error', '校对失败') }
+  }
+
+  // ========== 导出 ==========
+  const handleExport = async (format: 'txt' | 'docx' | 'pdf') => {
+    if (chapters.length === 0) { showToast('error', '无已生成章节'); return }
+    setShowExport(false)
+    const t = project?.title || '未命名'
+    try {
+      if (format === 'txt') {
+        const { exportToTxt } = await import('../../services/export')
+        const text = exportToTxt(t, chapters)
+        const r = await window.electronAPI.saveFile({ defaultPath: `${t}.txt`, filters: [{ name: 'TXT', extensions: ['txt'] }] })
+        if (r) { await window.electronAPI.writeFile(r.filePath, text); showToast('success', '已导出') }
+      } else if (format === 'docx') {
+        const { exportToDocx } = await import('../../services/export')
+        const blob = await exportToDocx(t, chapters)
+        const ab = await blob.arrayBuffer(); const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)))
+        const r = await window.electronAPI.saveFile({ defaultPath: `${t}.docx`, filters: [{ name: 'Word', extensions: ['docx'] }] })
+        if (r) { await window.electronAPI.writeBuffer(r.filePath, b64); showToast('success', '已导出') }
+      } else {
+        const { default: jsPDF } = await import('jspdf')
+        const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+        let y = 20; const m = 20; const mw = doc.internal.pageSize.getWidth() - m * 2; const lh = 7
+        doc.setFontSize(18); doc.text(`《${t}》`, doc.internal.pageSize.getWidth() / 2, y, { align: 'center' }); y += lh * 3
+        for (const ch of chapters) {
+          if (y > 260) { doc.addPage(); y = 20 }
+          doc.setFontSize(14); doc.text(`第 ${ch.chapter_number} 章  ${ch.title || ''}`, m, y); y += lh * 2
+          doc.setFontSize(10)
+          for (const line of doc.splitTextToSize(ch.content || '', mw)) { if (y > 270) { doc.addPage(); y = 20 }; doc.text(line, m, y); y += lh }
+          y += lh * 2
+        }
+        const pdfAb = doc.output('arraybuffer'); const b64p = btoa(String.fromCharCode(...new Uint8Array(pdfAb)))
+        const r = await window.electronAPI.saveFile({ defaultPath: `${t}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+        if (r) { await window.electronAPI.writeBuffer(r.filePath, b64p); showToast('success', '已导出') }
+      }
+    } catch (e: any) { showToast('error', '导出失败') }
+  }
+
+  // 面板拖拽
+  const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
+  const handleDividerMouseDown = (side: 'left' | 'right') => (e: React.MouseEvent) => {
+    e.preventDefault()
+    setDragging(side)
+    const startX = e.clientX
+    const startW = side === 'left' ? leftWidth : rightWidth
+    const onMove = (ev: MouseEvent) => {
+      const delta = side === 'left' ? ev.clientX - startX : startX - ev.clientX
+      const newW = Math.max(140, Math.min(400, startW + delta))
+      if (side === 'left') setLeftWidth(newW); else setRightWidth(newW)
+    }
+    const onUp = () => { setDragging(null); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // ========== 渲染 ==========
+  const chDone = (n: number) => {
+    const ch = chapters.find(c => c.chapter_number === n)
+    return ch && (ch.status === 'generated' || ch.status === 'edited')
+  }
+
+  if (!loaded) return <div className="flex justify-center py-24 text-text-secondary">加载中...</div>
+  if (!project) return null
+
+  return (
+    <div className="flex h-full">
+      {/* ===== 左栏：章节目录 ===== */}
+      <aside className="shrink-0 bg-white border-r border-border flex flex-col" style={{ width: leftWidth }}>
+        <div className="px-3 py-2.5 border-b border-border bg-bg-secondary">
+          <button onClick={() => navigate('/')} className="text-xs text-text-secondary hover:text-primary">← 返回</button>
+          {renaming ? (
+            <input
+              autoFocus
+              value={renameText}
+              onChange={(e) => setRenameText(e.target.value)}
+              onBlur={confirmRename}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') setRenaming(false) }}
+              className="w-full mt-0.5 text-sm font-medium px-1 py-0.5 border border-primary rounded"
+            />
+          ) : (
+            <h2 onClick={startRename} className="text-sm font-medium text-text-main mt-0.5 truncate cursor-pointer hover:text-primary" title="点击改名">
+              {project.title}
+            </h2>
+          )}
+        </div>
+        <div className="flex-1 overflow-auto py-1">
+          {/* 新建章按钮 */}
+          <button
+            onClick={addChapter}
+            className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-secondary flex items-center gap-1.5 border-b border-border mb-1"
+          >
+            <span>＋</span>
+            <span>新建章</span>
+          </button>
+
+          {chapterPlans.length === 0 ? (
+            <p className="text-xs text-text-placeholder text-center py-8">暂无细纲</p>
+          ) : (
+            chapterPlans.map(p => (
+              <div key={p.chapter_number} className="group flex items-center">
+                <button
+                  onClick={() => switchChapter(p.chapter_number)}
+                  className={`flex-1 text-left px-3 py-1.5 text-xs flex items-center gap-1.5 transition-colors
+                    ${selectedChapter === p.chapter_number ? 'bg-primary-light text-primary font-medium' : 'text-text-secondary hover:bg-bg-secondary'}
+                  `}
+                >
+                  <span className={chDone(p.chapter_number) ? 'text-success' : 'text-text-placeholder'}>
+                    {chDone(p.chapter_number) ? '●' : '○'}
+                  </span>
+                  <span className="truncate">{p.chapter_number}. {p.title}</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteChapter(p.chapter_number) }}
+                  className="px-1.5 text-xs text-text-placeholder hover:text-danger transition-colors shrink-0"
+                  title="删除"
+                >
+                  🗑
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="px-3 py-2 border-t border-border text-xs text-text-placeholder flex justify-between">
+          <span>{chapters.filter(c => c.status !== 'draft').length}/{chapterPlans.length} 章已写</span>
+          <button onClick={addChapter} className="hover:text-primary">＋</button>
+        </div>
+      </aside>
+
+      {/* 左-中分隔线 */}
+      <div
+        onMouseDown={handleDividerMouseDown('left')}
+        className={`w-1 cursor-col-resize shrink-0 transition-colors ${dragging === 'left' ? 'bg-primary' : 'bg-border hover:bg-primary/50'}`}
+      />
+
+      {/* ===== 中栏：编辑器 ===== */}
+      <main className="flex-1 flex flex-col min-w-0 bg-bg-secondary">
+        <div className="sticky top-0 z-10 bg-white border-b border-border px-4 py-2 flex items-center justify-between shrink-0">
+          <span className="text-sm font-medium text-text-main">
+            第 {selectedChapter} 章 · {chapterPlans.find(p => p.chapter_number === selectedChapter)?.title || '未命名'}
+          </span>
+          <div className="flex gap-1.5">
+            {generating && genTarget === `第${selectedChapter}章` ? (
+              <span className="px-3 py-1.5 text-xs text-warning flex items-center gap-1">
+                <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 生成中...
+              </span>
+            ) : (
+              <button onClick={() => setShowGenPanel(showGenPanel === 'chapter' ? null : 'chapter')} disabled={generating}
+                className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
+                {generating ? '⏳ 生成中...' : editingContent ? '🔄 重新生成' : '🤖 生成本章'}
+              </button>
+            )}
+            <button onClick={handleSave} disabled={saving}
+              className="px-3 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light disabled:opacity-50">
+              {saving ? '...' : '💾'}
+            </button>
+            <div className="relative">
+              <button onClick={() => setShowExport(!showExport)}
+                className="px-2.5 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">📥</button>
+              {showExport && (
+                <div className="absolute right-0 top-full mt-1 bg-white rounded-card border shadow-lg z-20 w-24">
+                  {(['txt','docx','pdf'] as const).map(f => (
+                    <button key={f} onClick={() => handleExport(f)}
+                      className="w-full px-3 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-secondary first:rounded-t-card last:rounded-b-card">
+                      {f==='txt'?'📄 TXT':f==='docx'?'📝 Word':'📕 PDF'}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 细纲提示 */}
+        {(() => {
+          const plan = chapterPlans.find(p => p.chapter_number === selectedChapter) as any
+          if (!plan) return null
+          return (
+            <div className="px-4 pt-2">
+              <div className="bg-primary-light/10 rounded border border-primary/10 px-3 py-1.5 text-xs flex flex-wrap gap-x-3">
+                <span><span className="text-text-placeholder">功能：</span>{plan.function || '—'}</span>
+                {plan.emotional_goal && <span><span className="text-text-placeholder">情绪：</span>{plan.emotional_goal}</span>}
+                <span className="truncate"><span className="text-text-placeholder">概要：</span>{plan.summary}</span>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* 生成选择面板 */}
+        {showGenPanel && (
+          <div className="mx-4 mt-2 bg-white rounded-card border border-primary/30 shadow-sm p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-text-main">
+                🤖 生成{showGenPanel === 'outline' ? '大纲' : showGenPanel === 'volumes' ? '卷纲' : '章节'} — 选择参考
+              </span>
+              <button onClick={() => setShowGenPanel(null)} className="text-text-placeholder hover:text-text-main">✕</button>
+            </div>
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <h4 className="text-xs font-medium text-text-main mb-1">🎨 风格库</h4>
+                {styleLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                  styleLibraries.map(lib => (
+                    <label key={lib.id} className="flex items-center gap-1.5 text-xs cursor-pointer py-0.5">
+                      <input type="radio" name="genP" checked={primaryStyleId === lib.id}
+                        onChange={() => setPrimaryStyleId(primaryStyleId === lib.id ? null : lib.id)} className="accent-primary" />
+                      <span className="flex-1">{lib.name}</span>
+                      <input type="checkbox" checked={auxiliaryStyleIds.includes(lib.id)}
+                        onChange={() => setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])}
+                        disabled={primaryStyleId === lib.id} className="accent-primary" />
+                      <span className="text-text-placeholder">辅</span>
+                    </label>
+                  ))}
+              </div>
+              <div className="flex-1">
+                <h4 className="text-xs font-medium text-text-main mb-1">📚 拆文库</h4>
+                {disassemblies.filter(d => d.current_stage >= 1).length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                  disassemblies.filter(d => d.current_stage >= 1).map(d => (
+                    <label key={d.id} className="flex items-center gap-1.5 text-xs cursor-pointer py-0.5">
+                      <input type="checkbox" checked={disassemblyIds.includes(d.id)}
+                        onChange={() => setDisassemblyIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
+                      <span>{d.name}</span>
+                    </label>
+                  ))}
+              </div>
+            </div>
+            <div>
+              <textarea
+                value={genHint}
+                onChange={(e) => setGenHint(e.target.value)}
+                placeholder="💡 额外提示（可选）：如“让主角更冷酷”“增加感情戏”“第一章要有悬念反转”..."
+                rows={2}
+                className="w-full px-3 py-1.5 text-xs border border-border-input rounded-btn resize-none focus:outline-none focus:border-primary placeholder:text-text-placeholder"
+              />
+            </div>
+            <button onClick={confirmGen} disabled={generating}
+              className="px-4 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
+              {generating ? '⏳ 生成中...' : '🤖 确定生成'}
+            </button>
+          </div>
+        )}
+
+        {/* 去AI味 */}
+        {editingContent && (
+          <div className="px-4 pt-2">
+            <DeslopPanel content={editingContent} onApply={(c) => { setEditingContent(c); handleSave() }} />
+          </div>
+        )}
+
+        {/* 编辑器 */}
+        <div className="flex-1 px-4 py-2">
+          <textarea
+            value={editingContent}
+            onChange={(e) => setEditingContent(e.target.value)}
+            className="w-full h-full min-h-[300px] px-4 py-3 border border-border-input rounded-card text-sm
+              focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-none
+              leading-relaxed bg-white"
+            placeholder="在左侧目录选择章节，点击「生成本章」开始..."
+          />
+        </div>
+      </main>
+
+      {/* 中-右分隔线 */}
+      <div
+        onMouseDown={handleDividerMouseDown('right')}
+        className={`w-1 cursor-col-resize shrink-0 transition-colors ${dragging === 'right' ? 'bg-primary' : 'bg-border hover:bg-primary/50'}`}
+      />
+
+      {/* ===== 右栏：工具面板 ===== */}
+      <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
+        {/* Tab 切换 */}
+        <div className="flex border-b border-border shrink-0">
+          {(['outline', 'volumes', 'review'] as const).map(tab => (
+            <button key={tab}
+              onClick={() => setRightTab(tab)}
+              className={`flex-1 py-2 text-xs font-medium transition-colors
+                ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
+              `}>
+              {{ outline: '📐 大纲', volumes: '📑 细纲', review: '🔍 校对' }[tab]}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-auto">
+          {/* 大纲 Tab */}
+          {rightTab === 'outline' && (
+            <div className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-text-main">故事大纲</span>
+                <div className="flex gap-2">
+                  {outlineContent && (
+                    <button onClick={() => setFullView({ title: '故事大纲', content: outlineContent })}
+                      className="text-xs text-primary hover:underline">📖 全屏查看</button>
+                  )}
+                  <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
+                    className="text-xs text-primary hover:underline disabled:opacity-50">🔄 重新生成</button>
+                </div>
+              </div>
+              {outlineContent ? (
+                <pre className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed max-h-[calc(100vh-200px)] overflow-auto">
+                  {outlineContent}
+                </pre>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-xs text-text-placeholder mb-2">尚无大纲</p>
+                  <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
+                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn">🤖 生成大纲</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 细纲 Tab */}
+          {rightTab === 'volumes' && (
+            <div className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-text-main">卷纲与细纲</span>
+                <div className="flex gap-2">
+                  <button onClick={addVolume}
+                    className="text-xs text-primary hover:underline">＋新建卷</button>
+                  <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
+                    className="text-xs text-primary hover:underline disabled:opacity-50">📐 生成卷纲</button>
+                </div>
+              </div>
+
+              {volumes.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-xs text-text-placeholder mb-2">尚无卷纲</p>
+                  <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
+                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn disabled:opacity-50">🤖 生成卷纲</button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {volumes.map(vol => {
+                    const isExpanded = expandedVolume === vol.volume_number
+                    const volPlans = chapterPlans.filter(
+                      p => p.chapter_number >= vol.chapter_range[0] && p.chapter_number <= vol.chapter_range[1]
+                    )
+                    return (
+                      <div key={vol.volume_number}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => { if (dragChapter) { moveChapterToVolume(dragChapter, vol.volume_number); setDragChapter(null) } }}
+                        className={`border border-border rounded-card overflow-hidden transition-colors
+                          ${dragChapter ? 'border-primary/50 bg-primary-light/10' : ''}`}
+                      >
+                        <button
+                          onClick={() => setExpandedVolume(isExpanded ? null : vol.volume_number)}
+                          className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-secondary transition-colors text-left"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-text-main truncate">{vol.title}</div>
+                            <div className="text-xs text-text-placeholder">第{vol.chapter_range[0]}-{vol.chapter_range[1]}章 · {vol.theme}</div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button onClick={(e) => { e.stopPropagation(); deleteVolume(vol.volume_number) }}
+                              className="text-xs text-text-placeholder hover:text-danger" title="删除此卷">🗑</button>
+                            <span className="text-xs text-text-placeholder">{isExpanded ? '▲' : '▼'}</span>
+                          </div>
+                        </button>
+                        {isExpanded && (
+                          <div className="border-t border-border px-3 py-2 space-y-1.5">
+                            <p className="text-xs text-text-secondary">{vol.summary}</p>
+                            <div className="flex gap-1.5 flex-wrap">
+                              <button
+                                onClick={async () => {
+                                  for (let c = vol.chapter_range[0]; c <= vol.chapter_range[1]; c++) {
+                                    if (!chapterPlans.find(p => p.chapter_number === c)) {
+                                      await genSingleChapterPlan(c)
+                                    }
+                                  }
+                                }}
+                                disabled={generating}
+                                className="px-2 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
+                              >🤖 一键生成全卷</button>
+                              <button
+                                onClick={() => setFullView({
+                                  title: vol.title,
+                                  content: `# ${vol.title}\n\n**主题**：${vol.theme}\n**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章\n**概要**：${vol.summary}\n**关键事件**：${vol.key_events.join('、')}\n\n## 本卷章节细纲\n\n${volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}\n`).join('\n')}`
+                                })}
+                                className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
+                              >📖 查看完整</button>
+                            </div>
+                            {/* 逐章生成列表 */}
+                            <div className="space-y-0.5 mt-1 max-h-64 overflow-auto">
+                              {Array.from({ length: vol.chapter_range[1] - vol.chapter_range[0] + 1 }, (_, i) => vol.chapter_range[0] + i).map(cn => {
+                                const plan = chapterPlans.find(p => p.chapter_number === cn)
+                                const prevPlan = cn > vol.chapter_range[0] ? chapterPlans.find(p => p.chapter_number === cn - 1) : true
+                                if (!plan) {
+                                  return (
+                                    <div key={cn} className="flex items-center gap-1.5 text-xs text-text-placeholder px-2 py-0.5">
+                                      <span>○</span><span className="flex-1">{cn}. 未生成</span>
+                                      <button onClick={() => genSingleChapterPlan(cn)}
+                                        disabled={generating || !prevPlan}
+                                        className="text-primary hover:underline disabled:opacity-30 text-xs">
+                                        {!prevPlan ? '需上章' : '生成'}
+                                      </button>
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div key={cn}
+                                    draggable onDragStart={() => setDragChapter(cn)}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={() => { if (dragChapter) { moveChapterToVolume(dragChapter, vol.volume_number); setDragChapter(null) } }}
+                                    onClick={() => setFullView({
+                                      title: `第${cn}章细纲：${plan.title}`,
+                                      content: `# 第${cn}章 ${plan.title}\n\n**功能**：${(plan as any).function || '—'}\n**情绪目标**：${(plan as any).emotional_goal || '—'}\n**结尾**：${(plan as any).ending_type || '—'}\n**字数**：${plan.estimated_words}字\n\n**概要**\n${plan.summary}\n\n**人物**：${plan.characters.join('、')}\n\n**关键事件**\n${plan.key_events.map((e: string) => '- ' + e).join('\n')}`
+                                    })}
+                                    className={`text-xs rounded px-2 py-0.5 cursor-pointer flex items-center gap-1.5 transition-colors
+                                      ${dragChapter === cn ? 'opacity-50' : ''}
+                                      ${selectedChapter === cn ? 'bg-primary-light text-primary' : 'text-text-secondary hover:bg-bg-secondary'}`}>
+                                    <span className={chDone(cn) ? 'text-success' : 'text-text-placeholder'}>{chDone(cn) ? '●' : '○'}</span>
+                                    <span className="flex-1 truncate">{cn}. {plan.title}</span>
+                                    <button onClick={(e) => { e.stopPropagation(); genSingleChapterPlan(cn) }}
+                                      className="text-text-placeholder hover:text-primary text-xs" title="重新生成">🔄</button>
+                                    <span className="text-text-placeholder cursor-grab" title="拖拽">⠿</span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 校对 Tab */}
+          {rightTab === 'review' && (
+            <div className="p-3">
+              <button onClick={handleReview} disabled={chapters.length < 2}
+                className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 mb-3">
+                🔍 执行校对
+              </button>
+              {reviewResult ? (
+                <pre className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{reviewResult}</pre>
+              ) : (
+                <p className="text-xs text-text-placeholder text-center py-8">
+                  生成至少 2 章后可执行校对，检查人物一致性、情节连贯、时间线和伏笔
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* 生成配置弹窗 */}
+      {genConfig.open && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setGenConfig(prev => ({ ...prev, open: false }))}>
+          <div className="bg-white rounded-card shadow-xl max-w-md w-full mx-4 max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-border flex items-center justify-between shrink-0">
+              <h2 className="text-section-title">{genConfig.title}</h2>
+              <button onClick={() => setGenConfig(prev => ({ ...prev, open: false }))} className="text-text-placeholder hover:text-text-main text-lg">✕</button>
+            </div>
+            <div className="px-5 py-3 space-y-3 overflow-auto flex-1">
+              <p className="text-xs text-text-secondary">{genConfig.desc}</p>
+              <div>
+                <h4 className="text-xs font-medium text-text-main mb-1.5">🎨 风格库</h4>
+                {styleLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                  styleLibraries.map(lib => (
+                    <label key={lib.id} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">
+                      <input type="radio" name="cfgPrimary" checked={primaryStyleId === lib.id}
+                        onChange={() => setPrimaryStyleId(primaryStyleId === lib.id ? null : lib.id)} className="accent-primary" />
+                      <span className="flex-1">{lib.name}</span>
+                      <input type="checkbox" checked={auxiliaryStyleIds.includes(lib.id)}
+                        onChange={() => setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])}
+                        disabled={primaryStyleId === lib.id} className="accent-primary" />
+                      <span className="text-text-placeholder w-10">辅</span>
+                    </label>
+                  ))}
+              </div>
+              <div>
+                <h4 className="text-xs font-medium text-text-main mb-1.5">📚 拆文库</h4>
+                {disassemblies.filter(d => d.current_stage >= 1).length === 0 ? <p className="text-xs text-text-placeholder">暂无已拆解</p> :
+                  disassemblies.filter(d => d.current_stage >= 1).map(d => (
+                    <label key={d.id} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">
+                      <input type="checkbox" checked={disassemblyIds.includes(d.id)}
+                        onChange={() => setDisassemblyIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
+                      <span>{d.name}</span>
+                    </label>
+                  ))}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+              <button onClick={() => setGenConfig(prev => ({ ...prev, open: false }))}
+                className="px-4 py-2 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary">取消</button>
+              <button onClick={() => {
+                const c = { primaryStyleId, auxIds: auxiliaryStyleIds, dissIds: disassemblyIds }
+                setGenConfig(prev => ({ ...prev, open: false }))
+                genConfig.onConfirm(c)
+              }} className="px-4 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">🤖 确定生成</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 全屏查看弹窗 */}
+      {fullView && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setFullView(null)}>
+          <div className="bg-white rounded-card shadow-2xl max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+              <h2 className="text-section-title text-text-main">{fullView.title}</h2>
+              <button onClick={() => setFullView(null)} className="w-8 h-8 flex items-center justify-center rounded-btn hover:bg-bg-secondary text-text-secondary">✕</button>
+            </div>
+            <div className="flex-1 overflow-auto p-5">
+              <pre className="text-sm text-text-main whitespace-pre-wrap leading-relaxed font-sans">{fullView.content}</pre>
+            </div>
+            <div className="px-5 py-3 border-t border-border text-right">
+              <button onClick={() => setFullView(null)} className="px-4 py-2 bg-primary text-white rounded-btn text-body hover:bg-primary-hover">关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
