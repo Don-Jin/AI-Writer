@@ -58,7 +58,7 @@ export default function ReferenceSelector({
   const setPrimaryStyle = (id: number | null) => {
     onChange({
       primaryStyleId: primaryStyleId === id ? null : id,
-      auxiliaryStyleIds: id && primaryStyleId === id ? auxiliaryStyleIds : auxiliaryStyleIds,
+      auxiliaryStyleIds: id ? auxiliaryStyleIds.filter(s => s !== id) : auxiliaryStyleIds,
       disassemblyIds,
     })
   }
@@ -106,32 +106,35 @@ export default function ReferenceSelector({
               <p className="text-caption text-text-placeholder">暂无风格库，先去「风格库」页面导入小说创建</p>
             ) : (
               <div className="space-y-1">
-                {styleLibraries.map(lib => (
-                  <label key={lib.id} className="flex items-center gap-2 py-1 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="primaryStyle"
-                      checked={primaryStyleId === lib.id}
-                      onChange={() => setPrimaryStyle(lib.id)}
-                      className="accent-primary"
-                    />
-                    <span className="text-body text-text-main flex-1">{lib.name}</span>
-                    <span className="text-caption text-text-placeholder">主风格</span>
-                    <input
-                      type="checkbox"
-                      checked={auxiliaryStyleIds.includes(lib.id)}
-                      onChange={() => toggleAuxStyle(lib.id)}
-                      disabled={primaryStyleId === lib.id}
-                      className="accent-primary ml-2"
-                    />
-                    <span className="text-caption text-text-placeholder">辅风格</span>
-                  </label>
-                ))}
-              </div>
-            )}
-            <p className="text-caption text-text-placeholder mt-1">
-              ○ 主风格（单选）：AI 写作时以该风格为基调 &nbsp; □ 辅风格（多选）：作为点缀参考
-            </p>
+                  {styleLibraries.map(lib => {
+                    const isPrimary = primaryStyleId === lib.id
+                    return (
+                    <div key={lib.id} className="flex items-center gap-2 py-1">
+                      <span className="text-body text-text-main flex-1">{lib.name}</span>
+                      <input
+                        type="checkbox"
+                        checked={isPrimary}
+                        onChange={() => setPrimaryStyle(isPrimary ? null : lib.id)}
+                        className="accent-primary"
+                      />
+                      <span className="text-caption text-text-placeholder">主风格</span>
+                      <input
+                        type="checkbox"
+                        checked={auxiliaryStyleIds.includes(lib.id)}
+                        onChange={() => {
+                          if (isPrimary) setPrimaryStyle(null)
+                          toggleAuxStyle(lib.id)
+                        }}
+                        className="accent-primary ml-2"
+                      />
+                      <span className="text-caption text-text-placeholder">辅风格</span>
+                    </div>
+                  )})}
+                </div>
+              )}
+              <p className="text-caption text-text-placeholder mt-1">
+                ☑ 主风格（单选）：AI 写作时以该风格为基调 &nbsp; ☑ 辅风格（多选）：作为点缀参考
+              </p>
           </div>
 
           {/* 拆文库 */}
@@ -188,6 +191,7 @@ export function buildReferenceContext(
       return `${isPrimary ? '【主风格】' : '【辅风格】'}${s.name}
 叙事视角：${p?.writing_style?.narrative_perspective || '未知'}
 句式特点：${p?.writing_style?.sentence_characteristics || '未知'}
+段落配比：${p?.writing_style?.paragraph_ratio || '未分析'}
 语言特点：${p?.language_features?.vocabulary_preference || '未知'}，${p?.language_features?.colloquial_level || ''}
 氛围基调：${p?.atmosphere?.primary || '未知'} / ${p?.atmosphere?.emotional_tone || ''}
 ${p?.raw_analysis ? '综合分析：' + p.raw_analysis.slice(0, 500) : ''}`

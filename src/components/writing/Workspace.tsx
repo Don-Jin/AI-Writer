@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
+
 import {
   PREPARE_SYSTEM, PREPARE_USER,
   OUTLINE_SYSTEM, OUTLINE_USER,
@@ -9,8 +10,11 @@ import {
   DETAIL_OUTLINE_SYSTEM, DETAIL_OUTLINE_USER,
   CHAPTER_SYSTEM, CHAPTER_USER,
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
+  CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
+  buildCharacterContext, buildWorldContext,
+  REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
-import type { NovelProject, Chapter, StyleLibrary } from '../../types'
+import type { NovelProject, Chapter, StyleLibrary, CharacterCard, WorldSetting } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
 
 // ===== 类型 =====
@@ -25,7 +29,16 @@ interface ChapterPlan {
   function?: string; ending_type?: string
 }
 
+interface ChapterFix {
+  chapter_number: number
+  severity: string
+  issues: string[]
+  fix_prompt: string
+}
+
 // ===== 构建引用上下文 =====
+function parseJson(v: string, fallback: any) { try { return JSON.parse(v) } catch { return fallback } }
+
 function buildRefContext(
   primaryStyleId: number | null, auxiliaryStyleIds: number[],
   disassemblyIds: number[], styleLibraries: StyleLibrary[],
@@ -40,6 +53,7 @@ function buildRefContext(
       return `${s.id === primaryStyleId ? '【主风格】' : '【辅风格】'}${s.name}
 叙事：${p?.writing_style?.narrative_perspective || ''}
 句式：${p?.writing_style?.sentence_characteristics || ''}
+段落配比：${p?.writing_style?.paragraph_ratio || ''}
 语言：${p?.language_features?.vocabulary_preference || ''}
 氛围：${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}
 ${p?.raw_analysis?.slice(0, 300) || ''}`
@@ -77,7 +91,12 @@ export default function Workspace() {
   const [saving, setSaving] = useState(false)
   const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'review'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
-  const [reviewResult, setReviewResult] = useState('')
+  const [reviewResult, setReviewResult] = useState<{ overall_report: string; chapter_fixes: ChapterFix[] } | null>(null)
+  const [reviewing, setReviewing] = useState(false)
+  const [fixingChapter, setFixingChapter] = useState<number | null>(null)
+  const [fixPreview, setFixPreview] = useState<{ chapterNum: number; original: string; modified: string; skipped: string[] } | null>(null)
+  const [editingFixPrompt, setEditingFixPrompt] = useState<number | null>(null)
+  const [editFixPromptText, setEditFixPromptText] = useState('')
 
   // 引用
   const [primaryStyleId, setPrimaryStyleId] = useState<number | null>(null)
@@ -85,6 +104,13 @@ export default function Workspace() {
   const [disassemblyIds, setDisassemblyIds] = useState<number[]>([])
   const [styleLibraries, setStyleLibraries] = useState<StyleLibrary[]>([])
   const [disassemblies, setDisassemblies] = useState<DisassemblyProject[]>([])
+
+  const [characters, setCharacters] = useState<CharacterCard[]>([])
+  const [worlds, setWorlds] = useState<WorldSetting[]>([])
+
+  // 流式生成
+  const [streamingText, setStreamingText] = useState('')
+  const cancelStreamRef = useRef<(() => void) | null>(null)
 
   // 导出
   const [showExport, setShowExport] = useState(false)
@@ -123,6 +149,12 @@ export default function Workspace() {
       setStyleLibraries(libs.map((l: any) => ({ ...l, style_profile: typeof l.style_profile === 'string' ? JSON.parse(l.style_profile) : l.style_profile })))
       const diss = await window.electronAPI.db.query('SELECT * FROM disassembly_projects ORDER BY updated_at DESC')
       setDisassemblies(diss)
+
+      // 加载角色卡片和世界设定
+      const chars = await window.electronAPI.db.query('SELECT * FROM character_cards WHERE project_id = ? ORDER BY CASE role_type WHEN "main" THEN 1 WHEN "antagonist" THEN 2 WHEN "support" THEN 3 ELSE 4 END', [Number(id)])
+      setCharacters(chars.map((c: any) => ({ ...c, relationships: parseJson(c.relationships, []), status_tracking: parseJson(c.status_tracking, {}) })))
+      const ws = await window.electronAPI.db.query('SELECT * FROM world_settings WHERE project_id = ? ORDER BY priority ASC', [Number(id)])
+      setWorlds(ws)
 
       // 恢复上次章节
       const lastCh = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`workspace_ch_${id}`])
@@ -205,7 +237,13 @@ export default function Workspace() {
 
   // ========== 生成逻辑（层级依赖） ==========
 
-  const getRefs = () => buildRefContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
+  const getRefs = () => {
+    const { styleContext, disassemblyContext } = buildRefContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
+    const charContext = buildCharacterContext(characters)
+    const worldCtx = buildWorldContext(worlds)
+    const cardContext = [charContext, worldCtx].filter(Boolean).join('\n\n')
+    return { styleContext, disassemblyContext, cardContext }
+  }
 
   /** 弹出生成配置后生成 */
   const startGenWithConfig = (title: string, desc: string, callback: (config: any) => Promise<void>) => {
@@ -223,11 +261,16 @@ export default function Workspace() {
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget('大纲')
     try {
-      const { styleContext, disassemblyContext } = config
+      const refs = config
         ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
         : getRefs()
-      const userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext)
+      const { styleContext, disassemblyContext } = refs
+      const cardContext = (refs as any).cardContext || buildCharacterContext(characters) + '\n\n' + buildWorldContext(worlds)
+      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
+      if (cardContext) {
+        userPrompt += `\n\n【📋 角色与世界设定——请严格遵循以下设定】\n${cardContext}\n\n请在生成大纲时尊重以上所有角色和世界设定。`
+      }
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: OUTLINE_SYSTEM },
         { role: 'user', content: userPrompt },
@@ -250,17 +293,23 @@ export default function Workspace() {
   const genVolumes = async () => {
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
     if (!window.electronAPI) return
-    const total = chapterPlans.length || 40
-    const { styleContext, disassemblyContext } = getRefs()
-    const enrichedOutline = outlineContent + (styleContext ? '\n\n【风格】\n' + styleContext : '') + (disassemblyContext ? '\n\n【拆文】\n' + disassemblyContext : '')
-    const reply = await window.electronAPI.aiChat([
-      { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
-      { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total) },
-    ], '卷纲生成')
-    const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\[[\s\S]*\]/)
-    const vols = JSON.parse(jm ? (jm[1] || jm[0]) : reply)
-    await saveVolumes(vols)
-    showToast('success', `卷纲完成！共 ${vols.length} 卷`)
+    setGenerating(true)
+    try {
+      const total = chapterPlans.length || 40
+      const { styleContext, disassemblyContext, cardContext } = getRefs()
+      let enrichedOutline = outlineContent
+      if (styleContext) enrichedOutline += '\n\n【风格】\n' + styleContext
+      if (disassemblyContext) enrichedOutline += '\n\n【拆文】\n' + disassemblyContext
+      if (cardContext) enrichedOutline += '\n\n【角色与世界设定】\n' + cardContext.slice(0, 1500)
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
+        { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total) },
+      ], '卷纲生成')
+      const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\[[\s\S]*\]/)
+      const vols = JSON.parse(jm ? (jm[1] || jm[0]) : reply)
+      await saveVolumes(vols)
+      showToast('success', `卷纲完成！共 ${vols.length} 卷`)
+    } finally { setGenerating(false) }
   }
 
   /** 生成某一章的细纲 — 读：大纲+所在卷纲+上一章细纲(如有)+风格+拆文 */
@@ -340,7 +389,7 @@ export default function Workspace() {
     }
   }
 
-  /** 生成某一章正文 — 读：大纲+所在卷纲+本章细纲+上一章正文+人物状态+情节+风格+拆文 */
+  /** 生成某一章正文 — 流式输出 + 卡片上下文 + 自动摘要 */
   const genChapter = async (chapNum: number, config?: any, hint?: string) => {
     if (!project || !window.electronAPI) return
     const plan = chapterPlans.find(p => p.chapter_number === chapNum)
@@ -348,10 +397,14 @@ export default function Workspace() {
 
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget(`第${chapNum}章`)
+    setStreamingText('')
+
     try {
-      const { styleContext, disassemblyContext } = config
-        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
+      const refs = config
+        ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
         : getRefs()
+      const { styleContext, disassemblyContext } = refs
+      const cardContext = (refs as any).cardContext || buildCharacterContext(characters) + '\n\n' + buildWorldContext(worlds)
 
       // 找所在卷
       const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
@@ -368,23 +421,86 @@ export default function Workspace() {
         if (ctx) charState = ctx.character_state
       } catch {}
 
+      // 前一章摘要（记录官）
+      let prevSummaryContext = ''
+      try {
+        const prevSummary = await window.electronAPI.db.get('SELECT summary FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum - 1])
+        if (prevSummary?.summary) prevSummaryContext = `\n\n【前一章摘要（记录官）】\n${prevSummary.summary}`
+      } catch {}
+
       const planAny = plan as any
-      const reply = await window.electronAPI.aiChat([
+      let userPrompt = CHAPTER_USER(
+        project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
+        plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
+        planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
+        styleContext, plotSummary, charState, prevExcerpt,
+        (disassemblyContext + '\n\n' + volContext + prevSummaryContext)
+      ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
+
+      // 注入卡片上下文
+      if (cardContext) {
+        userPrompt += `\n\n【📋 角色与世界设定——请严格遵循】\n${cardContext.slice(0, 2000)}\n\n请在写作时严格遵循以上所有角色设定和世界观设定。`
+      }
+
+      // 使用流式 API
+      let fullText = ''
+      const cleanup = window.electronAPI.onStreamChunk((data) => {
+        if (data.error) {
+          showToast('error', '流式生成错误：' + data.error)
+          return
+        }
+        if (!data.done && data.chunk) {
+          fullText += data.chunk
+          setStreamingText(fullText)
+        }
+      })
+
+      const reply = await window.electronAPI.aiChatStream([
         { role: 'system', content: CHAPTER_SYSTEM },
-        { role: 'user', content: CHAPTER_USER(
-          project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
-          plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
-          planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
-          styleContext, plotSummary, charState, prevExcerpt,
-          disassemblyContext + '\n\n' + volContext
-        ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')},
+        { role: 'user', content: userPrompt },
       ], '章节生成')
-      setEditingContent(reply)
-      await saveChapter(chapNum, plan.title, reply)
-      await updateContext(chapNum, reply)
-      showToast('success', `第${chapNum}章生成完成`)
+
+      cleanup()
+
+      const finalText = reply || fullText
+      setEditingContent(finalText)
+      setStreamingText('')
+      await saveChapter(chapNum, plan.title, finalText)
+      await updateContext(chapNum, finalText)
+
+      // 自动生成章节摘要（记录官）
+      try {
+        const summaryReply = await window.electronAPI.aiChat([
+          { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
+          { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, finalText, outlineContent) },
+        ], '章节摘要')
+        const jm = summaryReply.match(/\{[\s\S]*\}/)
+        if (jm) {
+          const s = JSON.parse(jm[0])
+          const prevSum = await window.electronAPI.db.get('SELECT id FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          const data = [
+            s.summary || '', JSON.stringify(s.characters_appeared || []), JSON.stringify(s.locations || []),
+            JSON.stringify(s.key_events || []), JSON.stringify(s.foreshadowing_planted || []),
+            JSON.stringify(s.foreshadowing_recovered || []), JSON.stringify(s.character_changes || {}),
+            JSON.stringify(s.world_changes || {}),
+          ]
+          if (prevSum) {
+            await window.electronAPI.db.run(
+              `UPDATE chapter_summaries SET summary=?,characters_appeared=?,locations=?,key_events=?,foreshadowing_planted=?,foreshadowing_recovered=?,character_changes=?,world_changes=? WHERE project_id=? AND chapter_number=?`,
+              [...data, Number(id), chapNum]
+            )
+          } else {
+            await window.electronAPI.db.run(
+              `INSERT INTO chapter_summaries (project_id,chapter_number,summary,characters_appeared,locations,key_events,foreshadowing_planted,foreshadowing_recovered,character_changes,world_changes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              [Number(id), chapNum, ...data]
+            )
+          }
+        }
+      } catch { /* 摘要失败不阻塞 */ }
+
+      showToast('success', `第${chapNum}章生成完成（含自动摘要）`)
     } catch (e: any) { showToast('error', '生成失败：' + e.message) }
-    finally { setGenerating(false); setGenTarget('') }
+    finally { setGenerating(false); setGenTarget(''); setStreamingText('') }
   }
 
   const handleSave = async () => {
@@ -530,27 +646,84 @@ export default function Workspace() {
   // ========== 校对 ==========
   const handleReview = async () => {
     if (!window.electronAPI || chapters.length < 2) { showToast('error', '至少需要2章才能校对'); return }
-    setReviewResult('')
+    setReviewing(true)
+    setReviewResult(null)
     try {
-      const summary = chapters.map(ch =>
-        `第${ch.chapter_number}章：${ch.title}\n${ch.content.slice(0, 200)}...`
-      ).join('\n\n')
+      const chapterContents = chapters.map(ch => ({
+        num: ch.chapter_number, title: ch.title, content: ch.content,
+      }))
       const reply = await window.electronAPI.aiChat([
-        { role: 'system', content: `你是小说一致性校对员。检查以下问题并给出报告：
-1. 人物一致性（名字、性格、关系是否前后矛盾）
-2. 情节连贯性（是否有跳跃或矛盾）
-3. 时间线（是否合理）
-4. 伏笔追踪（埋了哪些、收了哪些）
-5. 设定一致性（世界观规则是否前后矛盾）
-输出简洁的 Markdown 报告。` },
-        { role: 'user', content: `全书章节摘要：\n${summary}\n\n大纲：\n${outlineContent.slice(0, 1000)}\n\n请进行校对。` },
+        { role: 'system', content: REVIEW_SYSTEM },
+        { role: 'user', content: REVIEW_USER(project?.title || '', outlineContent, chapterContents) },
       ], '校对检查')
-      setReviewResult(reply)
-    } catch (e: any) { showToast('error', '校对失败') }
+      const cleanReply = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+      const jsonMatch = cleanReply.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0])
+        setReviewResult({
+          overall_report: parsed.overall_report || reply,
+          chapter_fixes: (parsed.chapter_fixes || []).filter((f: any) => f.issues?.length > 0),
+        })
+      } else {
+        setReviewResult({ overall_report: reply, chapter_fixes: [] })
+      }
+    } catch (e: any) { showToast('error', '校对失败：' + (e.message || '未知')) }
+    finally { setReviewing(false) }
+  }
+
+  /** 自动修改单章 */
+  const autoFixChapter = async (chNum: number, issues: string[], fixPrompt: string) => {
+    if (!window.electronAPI) return
+    const chapter = chapters.find(c => c.chapter_number === chNum)
+    if (!chapter?.content) { showToast('error', '该章无内容'); return }
+    setFixingChapter(chNum)
+    try {
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: AUTO_FIX_SYSTEM },
+        { role: 'user', content: AUTO_FIX_USER(chNum, chapter.content, issues, fixPrompt) },
+      ], '自动修改')
+      // 去除 markdown 代码块
+      let jsonStr = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+      const jm = jsonStr.match(/\{[\s\S]*\}/)
+      if (!jm) { showToast('error', 'AI 返回格式异常，请重试'); return }
+      const { fixes }: { fixes: { find: string; replace: string }[] } = JSON.parse(jm[0])
+      let modified = chapter.content
+      const skipped: string[] = []
+      for (const f of fixes) {
+        if (f.find === 'SKIP' || !f.find.trim()) { skipped.push(f.replace); continue }
+        // 精确匹配：查找并替换（只替换第一个匹配）
+        const idx = modified.indexOf(f.find)
+        if (idx === -1) { skipped.push(`未找到匹配文本: "${f.find.slice(0, 50)}..."`); continue }
+        // 确认唯一匹配
+        const secondIdx = modified.indexOf(f.find, idx + 1)
+        if (secondIdx !== -1) { skipped.push(`匹配不唯一: "${f.find.slice(0, 30)}..."`); continue }
+        modified = modified.slice(0, idx) + f.replace + modified.slice(idx + f.find.length)
+      }
+      setFixPreview({ chapterNum: chNum, original: chapter.content, modified, skipped })
+    } catch (e: any) { showToast('error', '自动修改失败：' + (e.message || '未知')) }
+    finally { setFixingChapter(null) }
+  }
+
+  const applyFixPreview = async () => {
+    if (!fixPreview || !window.electronAPI) return
+    try {
+      const chapter = chapters.find(c => c.chapter_number === fixPreview.chapterNum)
+      if (!chapter) return
+      await window.electronAPI.db.run(
+        "UPDATE chapters SET content=?, word_count=?, status='edited', updated_at=datetime('now','localtime') WHERE id=?",
+        [fixPreview.modified, fixPreview.modified.length, chapter.id]
+      )
+      setChapters(prev => prev.map(c =>
+        c.chapter_number === fixPreview.chapterNum ? { ...c, content: fixPreview.modified, word_count: fixPreview.modified.length } : c
+      ))
+      if (selectedChapter === fixPreview.chapterNum) setEditingContent(fixPreview.modified)
+      showToast('success', `第${fixPreview.chapterNum}章 已修改`)
+      setFixPreview(null)
+    } catch (e: any) { showToast('error', '保存失败') }
   }
 
   // ========== 导出 ==========
-  const handleExport = async (format: 'txt' | 'docx' | 'pdf') => {
+  const handleExport = async (format: 'txt' | 'docx' | 'md') => {
     if (chapters.length === 0) { showToast('error', '无已生成章节'); return }
     setShowExport(false)
     const t = project?.title || '未命名'
@@ -567,20 +740,10 @@ export default function Workspace() {
         const r = await window.electronAPI.saveFile({ defaultPath: `${t}.docx`, filters: [{ name: 'Word', extensions: ['docx'] }] })
         if (r) { await window.electronAPI.writeBuffer(r.filePath, b64); showToast('success', '已导出') }
       } else {
-        const { default: jsPDF } = await import('jspdf')
-        const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-        let y = 20; const m = 20; const mw = doc.internal.pageSize.getWidth() - m * 2; const lh = 7
-        doc.setFontSize(18); doc.text(`《${t}》`, doc.internal.pageSize.getWidth() / 2, y, { align: 'center' }); y += lh * 3
-        for (const ch of chapters) {
-          if (y > 260) { doc.addPage(); y = 20 }
-          doc.setFontSize(14); doc.text(`第 ${ch.chapter_number} 章  ${ch.title || ''}`, m, y); y += lh * 2
-          doc.setFontSize(10)
-          for (const line of doc.splitTextToSize(ch.content || '', mw)) { if (y > 270) { doc.addPage(); y = 20 }; doc.text(line, m, y); y += lh }
-          y += lh * 2
-        }
-        const pdfAb = doc.output('arraybuffer'); const b64p = btoa(String.fromCharCode(...new Uint8Array(pdfAb)))
-        const r = await window.electronAPI.saveFile({ defaultPath: `${t}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
-        if (r) { await window.electronAPI.writeBuffer(r.filePath, b64p); showToast('success', '已导出') }
+        const { exportToMd } = await import('../../services/export')
+        const md = exportToMd(t, chapters)
+        const r = await window.electronAPI.saveFile({ defaultPath: `${t}.md`, filters: [{ name: 'Markdown', extensions: ['md'] }] })
+        if (r) { await window.electronAPI.writeFile(r.filePath, md); showToast('success', '已导出') }
       }
     } catch (e: any) { showToast('error', '导出失败') }
   }
@@ -706,11 +869,11 @@ export default function Workspace() {
               <button onClick={() => setShowExport(!showExport)}
                 className="px-2.5 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">📥</button>
               {showExport && (
-                <div className="absolute right-0 top-full mt-1 bg-white rounded-card border shadow-lg z-20 w-24">
-                  {(['txt','docx','pdf'] as const).map(f => (
+                <div className="absolute right-0 top-full mt-1 bg-white rounded-card border shadow-lg z-20 w-28">
+                  {(['txt','docx','md'] as const).map(f => (
                     <button key={f} onClick={() => handleExport(f)}
                       className="w-full px-3 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-secondary first:rounded-t-card last:rounded-b-card">
-                      {f==='txt'?'📄 TXT':f==='docx'?'📝 Word':'📕 PDF'}
+                      {f==='txt'?'📄 TXT':f==='docx'?'📝 Word':'📋 MD'}
                     </button>
                   ))}
                 </div>
@@ -747,17 +910,25 @@ export default function Workspace() {
               <div className="flex-1">
                 <h4 className="text-xs font-medium text-text-main mb-1">🎨 风格库</h4>
                 {styleLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
-                  styleLibraries.map(lib => (
-                    <label key={lib.id} className="flex items-center gap-1.5 text-xs cursor-pointer py-0.5">
-                      <input type="radio" name="genP" checked={primaryStyleId === lib.id}
-                        onChange={() => setPrimaryStyleId(primaryStyleId === lib.id ? null : lib.id)} className="accent-primary" />
+                  styleLibraries.map(lib => {
+                    const isPrimary = primaryStyleId === lib.id
+                    return (
+                    <div key={lib.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                      <input type="checkbox" checked={isPrimary}
+                        onChange={() => {
+                          if (!isPrimary) setAuxiliaryStyleIds(prev => prev.filter(x => x !== lib.id))
+                          setPrimaryStyleId(isPrimary ? null : lib.id)
+                        }} className="accent-primary" />
                       <span className="flex-1">{lib.name}</span>
                       <input type="checkbox" checked={auxiliaryStyleIds.includes(lib.id)}
-                        onChange={() => setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])}
-                        disabled={primaryStyleId === lib.id} className="accent-primary" />
+                        onChange={() => {
+                          if (isPrimary) setPrimaryStyleId(null)
+                          setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])
+                        }}
+                        className="accent-primary" />
                       <span className="text-text-placeholder">辅</span>
-                    </label>
-                  ))}
+                    </div>
+                  )})}
               </div>
               <div className="flex-1">
                 <h4 className="text-xs font-medium text-text-main mb-1">📚 拆文库</h4>
@@ -796,14 +967,26 @@ export default function Workspace() {
 
         {/* 编辑器 */}
         <div className="flex-1 px-4 py-2">
-          <textarea
-            value={editingContent}
-            onChange={(e) => setEditingContent(e.target.value)}
-            className="w-full h-full min-h-[300px] px-4 py-3 border border-border-input rounded-card text-sm
-              focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-none
-              leading-relaxed bg-white"
-            placeholder="在左侧目录选择章节，点击「生成本章」开始..."
-          />
+          {(streamingText || generating) && genTarget === `第${selectedChapter}章` ? (
+            <div className="w-full h-full min-h-[300px] px-4 py-3 border border-primary/30 rounded-card bg-primary-light/5 overflow-auto">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-primary">AI 正在写作中...</span>
+              </div>
+              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">
+                {streamingText || '...'}
+              </pre>
+            </div>
+          ) : (
+            <textarea
+              value={editingContent}
+              onChange={(e) => setEditingContent(e.target.value)}
+              className="w-full h-full min-h-[300px] px-4 py-3 border border-border-input rounded-card text-base leading-relaxed
+                focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-none
+                bg-white"
+              placeholder="在左侧目录选择章节，点击「生成本章」开始..."
+            />
+          )}
         </div>
       </main>
 
@@ -977,18 +1160,129 @@ export default function Workspace() {
 
           {/* 校对 Tab */}
           {rightTab === 'review' && (
-            <div className="p-3">
-              <button onClick={handleReview} disabled={chapters.length < 2}
+            <div className="p-3 overflow-auto flex-1">
+              <button onClick={handleReview} disabled={chapters.length < 2 || reviewing}
                 className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 mb-3">
-                🔍 执行校对
+                {reviewing ? '⏳ 校对中...' : '🔍 执行校对'}
               </button>
-              {reviewResult ? (
-                <pre className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{reviewResult}</pre>
-              ) : (
+
+              {!reviewResult && !reviewing && (
                 <p className="text-xs text-text-placeholder text-center py-8">
                   生成至少 2 章后可执行校对，检查人物一致性、情节连贯、时间线和伏笔
                 </p>
               )}
+
+              {reviewResult && (
+                <div className="space-y-3">
+                  {/* 整体评价 */}
+                  <details className="bg-white rounded-card border border-border">
+                    <summary className="px-3 py-2 text-xs font-medium text-text-main cursor-pointer">📋 整体评价</summary>
+                    <p className="px-3 pb-2 text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{reviewResult.overall_report}</p>
+                  </details>
+
+                  {/* 逐章问题 */}
+                  {reviewResult.chapter_fixes.length === 0 ? (
+                    <p className="text-xs text-success text-center py-4">✅ 未发现明显问题</p>
+                  ) : (
+                    reviewResult.chapter_fixes.map(fix => {
+                      const sevColors: Record<string, string> = { '严重': 'bg-danger', '中等': 'bg-warning', '轻微': 'bg-text-placeholder' }
+                      const isEditing = editingFixPrompt === fix.chapter_number
+                      return (
+                        <div key={fix.chapter_number} className="bg-white rounded-card border border-border p-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-xs font-medium text-text-main">第{fix.chapter_number}章</span>
+                            <span className={`text-[10px] text-white px-1.5 py-0.5 rounded-full ${sevColors[fix.severity] || 'bg-text-placeholder'}`}>{fix.severity}</span>
+                          </div>
+                          <ul className="text-xs text-text-secondary mb-2 space-y-0.5">
+                            {fix.issues.map((issue, i) => (
+                              <li key={i} className="flex gap-1"><span className="text-text-placeholder shrink-0">{i + 1}.</span><span>{issue}</span></li>
+                            ))}
+                          </ul>
+                          {/* 修改提示 — 可编辑 */}
+                          {isEditing ? (
+                            <div className="mb-2">
+                              <textarea
+                                value={editFixPromptText}
+                                onChange={(e) => setEditFixPromptText(e.target.value)}
+                                rows={4}
+                                className="w-full px-2 py-1 text-xs border border-primary rounded resize-none focus:outline-none"
+                              />
+                              <div className="flex gap-2 mt-1">
+                                <button onClick={() => {
+                                  const updated = reviewResult.chapter_fixes.map(f =>
+                                    f.chapter_number === fix.chapter_number ? { ...f, fix_prompt: editFixPromptText } : f
+                                  )
+                                  setReviewResult({ ...reviewResult, chapter_fixes: updated })
+                                  setEditingFixPrompt(null)
+                                }} className="text-xs text-primary hover:underline">💾 保存</button>
+                                <button onClick={() => setEditingFixPrompt(null)} className="text-xs text-text-placeholder hover:underline">取消</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <pre
+                              onClick={() => { setEditingFixPrompt(fix.chapter_number); setEditFixPromptText(fix.fix_prompt) }}
+                              className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed mb-2 p-2 bg-bg-secondary rounded cursor-pointer hover:bg-border/30"
+                              title="点击编辑修改提示"
+                            >{fix.fix_prompt}</pre>
+                          )}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                const text = isEditing ? editFixPromptText : fix.fix_prompt
+                                navigator.clipboard.writeText(text).then(
+                                  () => showToast('success', '修改提示已复制！粘贴到生成面板的「额外提示」框中使用'),
+                                  () => showToast('error', '复制失败，请手动复制')
+                                )
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20"
+                            >📋 复制修改提示</button>
+                            <button
+                              onClick={() => autoFixChapter(fix.chapter_number, fix.issues, isEditing ? editFixPromptText : fix.fix_prompt)}
+                              disabled={fixingChapter === fix.chapter_number}
+                              className="flex-1 px-2 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
+                            >{fixingChapter === fix.chapter_number ? '⏳ 修改中...' : '🤖 自动修改'}</button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                  <p className="text-[10px] text-text-placeholder text-center pb-2">
+                    💡 「复制修改提示」后粘贴到生成面板的「额外提示」输入框，重新生成即可 | 「自动修改」仅处理可精确定位的文字问题
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 自动修改预览弹窗 */}
+          {fixPreview && (
+            <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setFixPreview(null)}>
+              <div className="bg-white rounded-card shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between shrink-0">
+                  <h3 className="text-sm font-medium">第{fixPreview.chapterNum}章 — 修改预览</h3>
+                  <button onClick={() => setFixPreview(null)} className="text-text-placeholder hover:text-text-main">✕</button>
+                </div>
+                <div className="p-4 overflow-auto flex-1 space-y-3">
+                  <div className="text-xs text-text-secondary">
+                    <p className="font-medium mb-1">📝 修改后内容（红字为改动部分示意，请对照确认）</p>
+                    <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed max-h-64 overflow-auto bg-bg-secondary p-3 rounded">
+                      {fixPreview.modified}
+                    </pre>
+                  </div>
+                  {fixPreview.skipped.length > 0 && (
+                    <div className="text-xs text-warning">
+                      <p className="font-medium">⚠️ 以下问题未能自动修改（需手动处理）：</p>
+                      <ul className="list-disc list-inside mt-1 space-y-0.5">
+                        {fixPreview.skipped.map((s, i) => <li key={i}>{s}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+                <div className="px-4 py-3 border-t border-border flex gap-2 justify-end shrink-0">
+                  <button onClick={() => setFixPreview(null)} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary">取消</button>
+                  <button onClick={applyFixPreview} className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn">✅ 确认修改并保存</button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -1053,7 +1347,7 @@ export default function Workspace() {
               <button onClick={() => setFullView(null)} className="w-8 h-8 flex items-center justify-center rounded-btn hover:bg-bg-secondary text-text-secondary">✕</button>
             </div>
             <div className="flex-1 overflow-auto p-5">
-              <pre className="text-sm text-text-main whitespace-pre-wrap leading-relaxed font-sans">{fullView.content}</pre>
+              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">{fullView.content}</pre>
             </div>
             <div className="px-5 py-3 border-t border-border text-right">
               <button onClick={() => setFullView(null)} className="px-4 py-2 bg-primary text-white rounded-btn text-body hover:bg-primary-hover">关闭</button>

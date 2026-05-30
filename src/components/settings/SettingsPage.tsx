@@ -1,108 +1,160 @@
 import { useState, useEffect } from 'react'
 import { showToast } from '../common/Toast'
 
+const PROVIDERS = [
+  { key: 'deepseek', name: 'DeepSeek', defaultUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-v4-pro', desc: '性价比高，中文能力强' },
+  { key: 'openai', name: 'OpenAI', defaultUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o', desc: '综合能力最强' },
+  { key: 'anthropic', name: 'Anthropic Claude', defaultUrl: 'https://api.anthropic.com/v1', defaultModel: 'claude-sonnet-4-6', desc: '长文本理解优秀' },
+  { key: 'qwen', name: '通义千问', defaultUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-plus', desc: '阿里云，国内稳定' },
+]
+
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState('')
+  const [provider, setProvider] = useState('deepseek')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [model, setModel] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
-  // 启动时从数据库加载已保存的 API Key
   useEffect(() => {
     const loadSettings = async () => {
       try {
         if (window.electronAPI) {
           const savedKey = await window.electronAPI.settings.get('api_key')
+          const savedProvider = await window.electronAPI.settings.get('llm_provider')
+          const savedUrl = await window.electronAPI.settings.get('api_base_url')
+          const savedModel = await window.electronAPI.settings.get('api_model')
+
           if (savedKey) setApiKey(savedKey)
+          const prov = savedProvider || 'deepseek'
+          setProvider(prov)
+
+          const p = PROVIDERS.find(p => p.key === prov) || PROVIDERS[0]
+          setBaseUrl(savedUrl || p.defaultUrl)
+          setModel(savedModel || p.defaultModel)
         }
-      } catch {
-        // 开发环境回退
-      }
+      } catch { /* 开发环境 */ }
       setLoaded(true)
     }
     loadSettings()
   }, [])
 
-  // 保存 API Key
-  const handleSave = async () => {
-    if (!apiKey.trim()) {
-      showToast('error', '请先输入 API Key')
-      return
+  const switchProvider = (prov: string) => {
+    setProvider(prov)
+    const p = PROVIDERS.find(p => p.key === prov)
+    if (p) {
+      setBaseUrl(p.defaultUrl)
+      setModel(p.defaultModel)
     }
+  }
+
+  const handleSave = async () => {
     setSaving(true)
     try {
       if (window.electronAPI) {
         await window.electronAPI.settings.set('api_key', apiKey.trim())
+        await window.electronAPI.settings.set('llm_provider', provider)
+        await window.electronAPI.settings.set('api_base_url', baseUrl.trim())
+        await window.electronAPI.settings.set('api_model', model.trim())
       }
-      showToast('success', 'API Key 已保存')
+      showToast('success', '设置已保存')
     } catch (e: any) {
       showToast('error', '保存失败：' + (e.message || '未知错误'))
-    } finally {
-      setSaving(false)
-    }
+    } finally { setSaving(false) }
   }
 
-  // 测试 API 连接
   const handleTest = async () => {
-    if (!apiKey.trim()) {
-      showToast('error', '请先输入 API Key')
-      return
-    }
+    if (!apiKey.trim()) { showToast('error', '请先输入 API Key'); return }
     setTesting(true)
     try {
       if (window.electronAPI) {
-        // 先保存 Key，确保测试使用最新值
         await window.electronAPI.settings.set('api_key', apiKey.trim())
-        // 发送一条简单的测试消息
+        await window.electronAPI.settings.set('llm_provider', provider)
+        await window.electronAPI.settings.set('api_base_url', baseUrl.trim())
+        await window.electronAPI.settings.set('api_model', model.trim())
         const reply = await window.electronAPI.aiChat([
           { role: 'user', content: '你好，请回复"测试成功"' },
         ])
         if (reply) {
-          showToast('success', 'API 连接测试通过！✓')
+          showToast('success', `${PROVIDERS.find(p => p.key === provider)?.name || 'API'} 连接测试通过！✓`)
         } else {
-          showToast('error', 'API 返回为空，请检查 Key 是否正确')
+          showToast('error', 'API 返回为空，请检查配置')
         }
       } else {
-        // 开发环境：模拟测试
         await new Promise((r) => setTimeout(r, 1500))
         showToast('success', 'API 连接测试通过！（开发模式）')
       }
     } catch (e: any) {
       showToast('error', '连接失败：' + (e.message || '未知错误'))
-    } finally {
-      setTesting(false)
-    }
+    } finally { setTesting(false) }
   }
+
+  const currentProvider = PROVIDERS.find(p => p.key === provider)
 
   return (
     <div>
       <h1 className="text-page-title text-text-main mb-6">设置</h1>
 
       <div className="bg-white rounded-card border border-border p-5 max-w-lg">
-        <h2 className="text-section-title text-text-main mb-4">🤖 DeepSeek API 配置</h2>
+        <h2 className="text-section-title text-text-main mb-4">🤖 AI 模型配置</h2>
+
+        {/* Provider 选择 */}
+        <div className="mb-4">
+          <label className="block text-body text-text-main mb-2">AI 供应商</label>
+          <div className="grid grid-cols-2 gap-2">
+            {PROVIDERS.map(p => (
+              <button
+                key={p.key}
+                onClick={() => switchProvider(p.key)}
+                disabled={!loaded}
+                className={`px-3 py-2 rounded-btn text-xs text-left border transition-colors
+                  ${provider === p.key
+                    ? 'border-primary bg-primary-light text-primary'
+                    : 'border-border-input text-text-secondary hover:bg-bg-secondary'
+                  }`}
+              >
+                <div className="font-medium">{p.name}</div>
+                <div className="text-text-placeholder mt-0.5">{p.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* API Base URL */}
         <div className="mb-4">
           <label className="block text-body text-text-main mb-2">API 地址</label>
           <input
             type="text"
-            value="https://api.deepseek.com"
-            disabled
-            className="w-full h-10 px-3 border border-border-input rounded-btn text-body bg-bg-secondary text-text-secondary"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://api.deepseek.com/v1"
+            disabled={!loaded}
+            className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+                       focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
+                       placeholder:text-text-placeholder disabled:bg-bg-secondary disabled:text-text-placeholder"
           />
-          <p className="text-caption text-text-secondary mt-1">默认使用 DeepSeek 官方 API</p>
+          <p className="text-caption text-text-secondary mt-1">
+            {currentProvider ? `${currentProvider.name} 默认：${currentProvider.defaultUrl}` : ''}
+          </p>
         </div>
 
         {/* 模型 */}
         <div className="mb-4">
-          <label className="block text-body text-text-main mb-2">模型</label>
+          <label className="block text-body text-text-main mb-2">模型名称</label>
           <input
             type="text"
-            value="deepseek-chat"
-            disabled
-            className="w-full h-10 px-3 border border-border-input rounded-btn text-body bg-bg-secondary text-text-secondary"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="deepseek-chat"
+            disabled={!loaded}
+            className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+                       focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
+                       placeholder:text-text-placeholder disabled:bg-bg-secondary disabled:text-text-placeholder"
           />
-          <p className="text-caption text-text-secondary mt-1">128K 上下文窗口，适合长文本处理</p>
+          <p className="text-caption text-text-secondary mt-1">
+            {currentProvider ? `${currentProvider.name} 推荐模型：${currentProvider.defaultModel}` : '输入模型名称'}
+          </p>
         </div>
 
         {/* API Key */}
@@ -127,12 +179,10 @@ export default function SettingsPage() {
         <div className="flex gap-3">
           <button
             onClick={handleSave}
-            disabled={!apiKey.trim() || saving || !loaded}
+            disabled={saving || !loaded}
             className={`px-4 py-2 rounded-btn text-body transition-colors
-              ${apiKey.trim() && loaded
-                ? 'bg-primary text-white hover:bg-primary-hover'
-                : 'bg-border text-text-placeholder cursor-not-allowed'
-              }`}
+              ${loaded ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}
+            `}
           >
             {saving ? '⏳ 保存中...' : '💾 保存'}
           </button>
@@ -154,7 +204,8 @@ export default function SettingsPage() {
       <div className="bg-white rounded-card border border-border p-5 max-w-lg mt-4">
         <h2 className="text-section-title text-text-main mb-3">📖 使用说明</h2>
         <ol className="text-body text-text-secondary space-y-2 list-decimal list-inside">
-          <li>在 <a href="https://platform.deepseek.com" target="_blank" className="text-primary hover:underline">platform.deepseek.com</a> 注册并获取 API Key</li>
+          <li>选择你的 AI 供应商（DeepSeek / OpenAI / Claude / 通义千问）</li>
+          <li>在对应平台注册并获取 API Key</li>
           <li>将 API Key 填入上方输入框，点击「测试连接」确认可用</li>
           <li>进入「风格库」页面，导入一本小说，AI 会分析其写作风格</li>
           <li>在首页新建项目，选择风格库，开始创作</li>

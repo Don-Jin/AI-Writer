@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 
 interface TokenStats {
-  today: { tokens: number; prompt: number; output: number; calls: number }
-  total: { tokens: number; prompt: number; output: number; calls: number }
+  today: { tokens: number; prompt: number; output: number; cached: number; calls: number }
+  total: { tokens: number; prompt: number; output: number; cached: number; calls: number }
 }
 
 export default function TokenMonitor() {
@@ -63,11 +63,12 @@ export default function TokenMonitor() {
               <span>{stats.today.calls} 次调用</span>
             </div>
             <div className="h-1.5 bg-border rounded-full overflow-hidden flex">
-              <div className="bg-primary h-full" style={{ width: `${stats.today.prompt / Math.max(stats.today.tokens, 1) * 100}%` }} />
+              <div className="bg-green-400 h-full" style={{ width: `${(stats.today.cached || 0) / Math.max(stats.today.tokens, 1) * 100}%` }} />
+              <div className="bg-primary h-full" style={{ width: `${(stats.today.prompt - (stats.today.cached || 0)) / Math.max(stats.today.tokens, 1) * 100}%` }} />
               <div className="bg-warning h-full" style={{ width: `${stats.today.output / Math.max(stats.today.tokens, 1) * 100}%` }} />
             </div>
             <div className="flex justify-between text-text-placeholder">
-              <span>输入 {formatTokens(stats.today.prompt)}</span>
+              <span>输入 {formatTokens(stats.today.prompt)}{(stats.today.cached || 0) > 0 ? ` (命中 ${formatTokens(stats.today.cached || 0)})` : ''}</span>
               <span>输出 {formatTokens(stats.today.output)}</span>
             </div>
           </div>

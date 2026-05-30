@@ -85,7 +85,7 @@ export default function LibraryDetail() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <button onClick={() => navigate('/library')} className="text-primary hover:underline mb-4 block">← 返回风格库</button>
+      <button onClick={() => navigate('/library')} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary hover:text-text-main mb-4 inline-flex items-center gap-1">← 返回风格库</button>
 
       <div className="bg-white rounded-card border border-border p-6">
         <h1 className="text-page-title mb-4">{library.name}</h1>
@@ -95,6 +95,7 @@ export default function LibraryDetail() {
         <Section title="✍️ 写作风格（AI生成时读取）">
           <Field label="叙事视角" path={['writing_style', 'narrative_perspective']} multiline />
           <Field label="句式特点" path={['writing_style', 'sentence_characteristics']} multiline />
+          <Field label="段落配比" path={['writing_style', 'paragraph_ratio']} multiline />
           <Field label="节奏感" path={['writing_style', 'pace']} multiline />
         </Section>
 

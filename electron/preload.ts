@@ -14,13 +14,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
     set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   },
 
-  // AI
-  aiChat: (messages: { role: string; content: string }[], purpose?: string) => ipcRenderer.invoke('ai:chat', messages, purpose),
+  // AI — 非流式（兼容旧代码）
+  aiChat: (messages: { role: string; content: string }[], purpose?: string) =>
+    ipcRenderer.invoke('ai:chat', messages, purpose),
+
+  // AI — 流式
+  aiChatStream: (messages: { role: string; content: string }[], purpose?: string) =>
+    ipcRenderer.invoke('ai:chatStream', messages, purpose),
+
+  // 监听流式数据块
+  onStreamChunk: (callback: (data: { chunk: string; done: boolean; error?: string }) => void) => {
+    const handler = (_event: any, data: { chunk: string; done: boolean; error?: string }) => {
+      callback(data)
+    }
+    ipcRenderer.on('ai:stream-chunk', handler)
+    // 返回取消监听的函数
+    return () => {
+      ipcRenderer.removeListener('ai:stream-chunk', handler)
+    }
+  },
 
   // Token 用量
   tokens: {
     stats: () => ipcRenderer.invoke('tokens:stats'),
     history: () => ipcRenderer.invoke('tokens:history'),
+    onLastUsage: (callback: (data: { purpose: string; model: string; promptTokens: number; cachedTokens: number; outputTokens: number; totalTokens: number; cost: number }) => void) => {
+      const handler = (_event: any, data: any) => callback(data)
+      ipcRenderer.on('tokens:last-usage', handler)
+      return () => ipcRenderer.removeListener('tokens:last-usage', handler)
+    },
   },
 
   // 文件

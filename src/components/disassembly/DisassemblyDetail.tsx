@@ -136,11 +136,7 @@ export default function DisassemblyDetail() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex items-center gap-2 text-caption text-text-secondary mb-4">
-        <button onClick={() => navigate('/disassembly')} className="hover:text-primary">拆文库</button>
-        <span>/</span>
-        <span className="text-text-main">{project.name}</span>
-      </div>
+      <button onClick={() => navigate('/disassembly')} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary hover:text-text-main mb-4 inline-flex items-center gap-1">← 返回拆文库</button>
 
       <div className="flex items-center justify-between mb-6">
         <div>

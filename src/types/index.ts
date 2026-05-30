@@ -3,6 +3,7 @@ export interface StyleProfile {
   writing_style: {
     narrative_perspective: string
     sentence_characteristics: string
+    paragraph_ratio: string
     pace: string
   }
   language_features: {
@@ -91,6 +92,59 @@ export interface Chapter {
   updated_at: string
 }
 
+// ========== 角色卡片 ==========
+export type CharacterRoleType = 'main' | 'support' | 'antagonist' | 'minor'
+
+export interface CharacterCard {
+  id: number
+  project_id: number
+  name: string
+  role_type: CharacterRoleType
+  personality: string
+  background: string
+  appearance: string
+  abilities: string
+  relationships: { name: string; relation: string; description: string }[]
+  status_tracking: { current_status: string; location: string; goal: string }
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// ========== 世界设定卡片 ==========
+export type WorldCategory = 'location' | 'faction' | 'rule' | 'timeline' | 'general'
+
+export interface WorldSetting {
+  id: number
+  project_id: number
+  category: WorldCategory
+  name: string
+  description: string
+  details: string
+  trigger_keywords: string
+  priority: number
+  is_global: number
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// ========== 章节摘要 ==========
+export interface ChapterSummary {
+  id: number
+  project_id: number
+  chapter_number: number
+  summary: string
+  characters_appeared: string[]
+  locations: string[]
+  key_events: string[]
+  foreshadowing_planted: string[]
+  foreshadowing_recovered: string[]
+  character_changes: Record<string, any>
+  world_changes: Record<string, any>
+  created_at: string
+}
+
 // ========== 上下文状态 ==========
 export interface CharacterState {
   [name: string]: {
@@ -109,6 +163,18 @@ export interface ContextState {
   plot_summary: string
   last_chapter: number
   updated_at: string
+}
+
+// ========== LLM Provider ==========
+export type LLMProvider = 'deepseek' | 'openai' | 'anthropic' | 'qwen'
+
+export interface LLMConfig {
+  provider: LLMProvider
+  apiKey: string
+  baseUrl: string
+  model: string
+  temperature: number
+  maxTokens: number
 }
 
 // ========== 设置 ==========
@@ -130,9 +196,12 @@ export interface ElectronAPI {
     set: (key: string, value: string) => Promise<boolean>
   }
   aiChat: (messages: { role: string; content: string }[], purpose?: string) => Promise<string>
+  aiChatStream: (messages: { role: string; content: string }[], purpose?: string) => Promise<string>
+  onStreamChunk: (callback: (data: { chunk: string; done: boolean; error?: string }) => void) => () => void
   tokens: {
-    stats: () => Promise<{ today: { tokens: number; prompt: number; output: number; calls: number }; total: { tokens: number; prompt: number; output: number; calls: number } }>
+    stats: () => Promise<{ today: { tokens: number; prompt: number; output: number; cached: number; calls: number }; total: { tokens: number; prompt: number; output: number; cached: number; calls: number } }>
     history: () => Promise<any[]>
+    onLastUsage: (callback: (data: { purpose: string; model: string; promptTokens: number; cachedTokens: number; outputTokens: number; totalTokens: number; cost: number }) => void) => () => void
   }
   openFile: (options?: any) => Promise<{ filePath: string; fileName: string } | null>
   readFile: (filePath: string) => Promise<string>

@@ -37,6 +37,47 @@ function createWindow() {
   })
 }
 
+// ==================== LLM Provider 配置 ====================
+
+interface ProviderConfig {
+  apiKey: string
+  baseURL: string
+  model: string
+}
+
+function getProviderConfig(): ProviderConfig {
+  const provider = get('SELECT value FROM settings WHERE key = ?', ['llm_provider'])?.value || 'deepseek'
+  const apiKey = get('SELECT value FROM settings WHERE key = ?', ['api_key'])?.value || ''
+
+  const providerDefaults: Record<string, { baseURL: string; model: string }> = {
+    deepseek: { baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
+    openai: { baseURL: 'https://api.openai.com/v1', model: 'gpt-4o' },
+    anthropic: { baseURL: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6' },
+    qwen: { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  }
+
+  const defaults = providerDefaults[provider] || providerDefaults.deepseek
+  const baseUrl = get('SELECT value FROM settings WHERE key = ?', ['api_base_url'])?.value || defaults.baseURL
+  const model = get('SELECT value FROM settings WHERE key = ?', ['api_model'])?.value || defaults.model
+
+  return { apiKey, baseURL: baseUrl, model }
+}
+
+function recordTokenUsage(purpose: string, model: string, promptTokens: number, outputTokens: number, cachedTokens: number) {
+  run(
+    'INSERT INTO token_usage (purpose, model, prompt_tokens, cached_tokens, output_tokens, total_tokens) VALUES (?,?,?,?,?,?)',
+    [purpose || '', model, promptTokens, cachedTokens, outputTokens, promptTokens + outputTokens]
+  )
+}
+
+function notifyTokenUsage(purpose: string, model: string, promptTokens: number, cachedTokens: number, outputTokens: number) {
+  mainWindow?.webContents.send('tokens:last-usage', {
+    purpose, model, promptTokens, cachedTokens, outputTokens,
+    totalTokens: promptTokens + outputTokens,
+    cost: (promptTokens / 1_000_000) * 3 + (outputTokens / 1_000_000) * 6,
+  })
+}
+
 // ==================== IPC 处理器 ====================
 
 function registerIpcHandlers() {
@@ -64,54 +105,118 @@ function registerIpcHandlers() {
     return true
   })
 
-  // ---- AI API 调用 ----
+  // ---- AI API 调用（非流式，兼容旧代码） ----
   ipcMain.handle('ai:chat', async (_event, messages: any[], purpose?: string) => {
-    const apiKey = get('SELECT value FROM settings WHERE key = ?', ['api_key'])?.value
-    const baseUrl = get('SELECT value FROM settings WHERE key = ?', ['api_base_url'])?.value || 'https://api.deepseek.com'
-    const model = get('SELECT value FROM settings WHERE key = ?', ['api_model'])?.value || 'deepseek-chat'
-
-    if (!apiKey) {
-      throw new Error('请先在设置页面配置 DeepSeek API Key')
+    const config = getProviderConfig()
+    if (!config.apiKey) {
+      throw new Error('请先在设置页面配置 API Key')
     }
 
     const { default: OpenAI } = await import('openai')
     const client = new OpenAI({
-      apiKey,
-      baseURL: baseUrl + '/v1',
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
     })
 
     const response = await client.chat.completions.create({
-      model,
+      model: config.model,
       messages,
       temperature: 0.7,
       max_tokens: 4096,
     })
 
-    // 记录 Token 用量
     if (response.usage) {
-      run(
-        'INSERT INTO token_usage (purpose, model, prompt_tokens, output_tokens, total_tokens) VALUES (?,?,?,?,?)',
-        [purpose || '', model, response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens]
-      )
+      const promptTokens = response.usage.prompt_tokens || 0
+      const outputTokens = response.usage.completion_tokens || 0
+      const cachedTokens = (response.usage as any).prompt_tokens_details?.cached_tokens || 0
+      recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
+      notifyTokenUsage(purpose || '', config.model, promptTokens, cachedTokens, outputTokens)
     }
 
     return response.choices[0]?.message?.content || ''
+  })
+
+  // ---- AI 流式调用 ----
+  ipcMain.handle('ai:chatStream', async (_event, messages: any[], purpose?: string) => {
+    const config = getProviderConfig()
+    if (!config.apiKey) {
+      throw new Error('请先在设置页面配置 API Key')
+    }
+
+    const { default: OpenAI } = await import('openai')
+    const client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+    })
+
+    try {
+      const stream = await client.chat.completions.create({
+        model: config.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 4096,
+        stream: true,
+        stream_options: { include_usage: true },
+      })
+
+      let fullContent = ''
+      let promptTokens = 0
+      let outputTokens = 0
+      let cachedTokens = 0
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content || ''
+        if (delta) {
+          fullContent += delta
+          mainWindow?.webContents.send('ai:stream-chunk', { chunk: delta, done: false })
+        }
+        // 最后一个 chunk 包含 usage 数据
+        if (chunk.usage) {
+          promptTokens = chunk.usage.prompt_tokens || 0
+          outputTokens = chunk.usage.completion_tokens || 0
+          cachedTokens = (chunk.usage as any).prompt_tokens_details?.cached_tokens || 0
+        }
+      }
+
+      // 如果 API 未返回 usage，用字符数估算（中文字符≈1 token，英文≈0.25 token）
+      if (promptTokens === 0 && outputTokens === 0) {
+        const promptText = messages.map((m: any) => m.content).join('')
+        const cnChars = (promptText.match(/[一-鿿]/g) || []).length
+        promptTokens = Math.max(1, cnChars + Math.floor((promptText.length - cnChars) / 4))
+        const outCnChars = (fullContent.match(/[一-鿿]/g) || []).length
+        outputTokens = Math.max(1, outCnChars + Math.floor((fullContent.length - outCnChars) / 4))
+      }
+
+      // 发送完成信号（附带用量数据）
+      mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, usage: { promptTokens, outputTokens, cachedTokens } })
+
+      // 记录 token 用量
+      recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
+
+      // 通知用量
+      notifyTokenUsage(purpose || '', config.model, promptTokens, cachedTokens, outputTokens)
+
+      return fullContent
+    } catch (err: any) {
+      mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, error: err.message })
+      throw err
+    }
   })
 
   // ---- Token 用量查询 ----
   ipcMain.handle('tokens:stats', () => {
     const today = new Date().toISOString().slice(0, 10)
     const todayRow = get(
-      "SELECT COALESCE(SUM(total_tokens),0) as total, COALESCE(SUM(prompt_tokens),0) as prompt, COALESCE(SUM(output_tokens),0) as output, COUNT(*) as calls FROM token_usage WHERE created_at >= ?",
+      "SELECT COALESCE(SUM(total_tokens),0) as total, COALESCE(SUM(prompt_tokens),0) as prompt, COALESCE(SUM(output_tokens),0) as output, COALESCE(SUM(cached_tokens),0) as cached, COUNT(*) as calls FROM token_usage WHERE created_at >= ?",
       [today]
     )
     const allRow = get(
-      "SELECT COALESCE(SUM(total_tokens),0) as total, COALESCE(SUM(prompt_tokens),0) as prompt, COALESCE(SUM(output_tokens),0) as output, COUNT(*) as calls FROM token_usage"
+      "SELECT COALESCE(SUM(total_tokens),0) as total, COALESCE(SUM(prompt_tokens),0) as prompt, COALESCE(SUM(output_tokens),0) as output, COALESCE(SUM(cached_tokens),0) as cached, COUNT(*) as calls FROM token_usage"
     )
 
     return {
-      today: { tokens: todayRow?.total || 0, prompt: todayRow?.prompt || 0, output: todayRow?.output || 0, calls: todayRow?.calls || 0 },
-      total: { tokens: allRow?.total || 0, prompt: allRow?.prompt || 0, output: allRow?.output || 0, calls: allRow?.calls || 0 },
+      today: { tokens: todayRow?.total || 0, prompt: todayRow?.prompt || 0, output: todayRow?.output || 0, cached: todayRow?.cached || 0, calls: todayRow?.calls || 0 },
+      total: { tokens: allRow?.total || 0, prompt: allRow?.prompt || 0, output: allRow?.output || 0, cached: allRow?.cached || 0, calls: allRow?.calls || 0 },
     }
   })
 

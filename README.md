@@ -34,7 +34,21 @@
 npm install
 ```
 
-> 注意：Electron 二进制需要从 GitHub 下载，国内用户可能需要配置镜像或手动下载。
+如果 Electron 二进制下载失败（国内常见问题），手动下载：
+
+```bash
+# 设置国内镜像加速 npm 包下载
+npm config set registry https://registry.npmmirror.com
+
+# 安装依赖
+npm install
+
+# Electron 二进制需从 GitHub 下载，失败则手动下载解压
+curl -L -o /tmp/electron.zip "https://github.com/electron/electron/releases/download/v28.3.3/electron-v28.3.3-win32-x64.zip"
+rm -rf node_modules/electron/dist
+unzip /tmp/electron.zip -d node_modules/electron/dist/
+printf "electron.exe" > node_modules/electron/path.txt
+```
 
 ### 2. 配置 API Key
 

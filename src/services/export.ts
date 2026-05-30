@@ -1,6 +1,6 @@
 /**
  * 文档导出服务
- * 支持 TXT、DOCX (Word)、PDF 三种格式
+ * 支持 TXT、DOCX (Word)、Markdown 三种格式
  */
 
 import type { Chapter } from '../types'
@@ -125,12 +125,39 @@ export async function exportToDocx(
   return await Packer.toBlob(doc)
 }
 
-/** 导出为 PDF (需要在 Electron 主进程中处理，这里返回文本由渲染进程处理) */
-export function exportToPdfText(
+/** 导出为 Markdown */
+export function exportToMd(
   title: string,
   chapters: Chapter[]
 ): string {
-  // PDF 导出较复杂，先转为纯文本，由 jspdf 在需要时处理
-  // 这里返回格式化的文本，渲染进程可以调用 jspdf
-  return exportToTxt(title, chapters)
+  const lines: string[] = []
+
+  lines.push(`# 《${title}》`)
+  lines.push('')
+
+  // 目录
+  if (chapters.length > 0) {
+    lines.push('## 目录')
+    lines.push('')
+    chapters.forEach((ch) => {
+      lines.push(`- [第 ${ch.chapter_number} 章 ${ch.title || ''}](#第-${ch.chapter_number}-章)`)
+    })
+    lines.push('')
+  }
+
+  // 正文
+  chapters.forEach((ch) => {
+    lines.push(`## 第 ${ch.chapter_number} 章 ${ch.title || ''}`)
+    lines.push('')
+    const content = ch.content || '（本章暂无内容）'
+    // 保持原文段落格式
+    content.split('\n').forEach(para => {
+      lines.push(para || '')
+    })
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+  })
+
+  return lines.join('\n')
 }

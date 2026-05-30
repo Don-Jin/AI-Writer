@@ -108,6 +108,7 @@ function createTables(): void {
       purpose        TEXT NOT NULL DEFAULT '',
       model          TEXT NOT NULL DEFAULT 'deepseek-chat',
       prompt_tokens  INTEGER NOT NULL DEFAULT 0,
+      cached_tokens  INTEGER NOT NULL DEFAULT 0,
       output_tokens  INTEGER NOT NULL DEFAULT 0,
       total_tokens   INTEGER NOT NULL DEFAULT 0,
       created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
@@ -139,13 +140,69 @@ function createTables(): void {
       updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
     );
+
+    -- 角色卡片（结构化角色管理）
+    CREATE TABLE IF NOT EXISTS character_cards (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id      INTEGER NOT NULL,
+      name            TEXT NOT NULL,
+      role_type       TEXT NOT NULL DEFAULT 'main',
+      personality     TEXT DEFAULT '',
+      background      TEXT DEFAULT '',
+      appearance      TEXT DEFAULT '',
+      abilities       TEXT DEFAULT '',
+      relationships   TEXT DEFAULT '[]',
+      status_tracking TEXT DEFAULT '{}',
+      notes           TEXT DEFAULT '',
+      created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+    );
+
+    -- 世界设定卡片
+    CREATE TABLE IF NOT EXISTS world_settings (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id      INTEGER NOT NULL,
+      category        TEXT NOT NULL DEFAULT 'general',
+      name            TEXT NOT NULL,
+      description     TEXT DEFAULT '',
+      details         TEXT DEFAULT '',
+      trigger_keywords TEXT DEFAULT '',
+      priority        INTEGER NOT NULL DEFAULT 0,
+      is_global       INTEGER NOT NULL DEFAULT 0,
+      notes           TEXT DEFAULT '',
+      created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+    );
+
+    -- 章节摘要（记录官 — 自动提取）
+    CREATE TABLE IF NOT EXISTS chapter_summaries (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id            INTEGER NOT NULL,
+      chapter_number        INTEGER NOT NULL,
+      summary               TEXT NOT NULL DEFAULT '',
+      characters_appeared   TEXT DEFAULT '[]',
+      locations             TEXT DEFAULT '[]',
+      key_events            TEXT DEFAULT '[]',
+      foreshadowing_planted TEXT DEFAULT '[]',
+      foreshadowing_recovered TEXT DEFAULT '[]',
+      character_changes     TEXT DEFAULT '{}',
+      world_changes         TEXT DEFAULT '{}',
+      created_at            TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE,
+      UNIQUE(project_id, chapter_number)
+    );
   `)
+
+  // 迁移：为旧数据库添加 cached_tokens 列
+  try { db.run('ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0') } catch {}
 
   // 插入默认设置
   db.run(`
     INSERT OR IGNORE INTO settings (key, value) VALUES ('api_key', '');
     INSERT OR IGNORE INTO settings (key, value) VALUES ('api_base_url', 'https://api.deepseek.com');
-    INSERT OR IGNORE INTO settings (key, value) VALUES ('api_model', 'deepseek-chat');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('api_model', 'deepseek-v4-pro');
   `)
 
   saveToDisk()

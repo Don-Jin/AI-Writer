@@ -1,5 +1,29 @@
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import TokenMonitor from '../common/TokenMonitor'
+
+function CompactTokenMonitor() {
+  const [todayTokens, setTodayTokens] = useState(0)
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        if (window.electronAPI?.tokens) {
+          const s = await window.electronAPI.tokens.stats()
+          setTodayTokens(s.today.tokens)
+        }
+      } catch {}
+    }
+    fetch()
+    const t = setInterval(fetch, 10000)
+    return () => clearInterval(t)
+  }, [])
+  const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n)
+  return (
+    <div className="text-xs text-text-placeholder text-center py-1" title={`今日 Token: ${fmt(todayTokens)}`}>
+      📊<br />{fmt(todayTokens)}
+    </div>
+  )
+}
 
 interface SidebarProps {
   collapsed?: boolean
@@ -40,6 +64,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )
         })}
         <div className="flex-1" />
+        <CompactTokenMonitor />
         <div className="text-xs text-text-placeholder -rotate-90 whitespace-nowrap mb-4">v1</div>
       </aside>
     )
@@ -77,7 +102,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       <TokenMonitor />
       <div className="px-5 py-3 text-caption text-text-placeholder border-t border-border">
-        v1.0.0
+        v1.1.0
       </div>
     </aside>
   )
