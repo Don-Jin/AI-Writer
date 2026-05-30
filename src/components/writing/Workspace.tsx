@@ -109,10 +109,17 @@ export default function Workspace() {
   const [characters, setCharacters] = useState<CharacterCard[]>([])
   const [worlds, setWorlds] = useState<WorldSetting[]>([])
   const [cardRefresh, setCardRefresh] = useState(0)
+  const [cardGenLoading, setCardGenLoading] = useState(false)
 
   // 流式生成
   const [streamingText, setStreamingText] = useState('')
+  const cancelledRef = useRef(false)
   const cancelStreamRef = useRef<(() => void) | null>(null)
+
+  const handleCancel = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+  }
 
   // 导出
   const [showExport, setShowExport] = useState(false)
@@ -273,13 +280,18 @@ export default function Workspace() {
       if (cardContext) {
         userPrompt += `\n\n【📋 角色与世界设定——请严格遵循以下设定】\n${cardContext}\n\n请在生成大纲时尊重以上所有角色和世界设定。`
       }
+      cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: OUTLINE_SYSTEM },
         { role: 'user', content: userPrompt },
       ], '大纲生成')
+      if (cancelledRef.current) return
       await saveOutline(reply)
       showToast('success', '大纲已生成')
-    } catch (e: any) { showToast('error', '大纲生成失败：' + e.message) }
+    } catch (e: any) {
+      if (cancelledRef.current) showToast('info', '已取消生成')
+      else showToast('error', '大纲生成失败：' + (e.message || '未知'))
+    }
     finally { setGenerating(false); setGenTarget('') }
   }
 
@@ -303,14 +315,19 @@ export default function Workspace() {
       if (styleContext) enrichedOutline += '\n\n【风格】\n' + styleContext
       if (disassemblyContext) enrichedOutline += '\n\n【拆文】\n' + disassemblyContext
       if (cardContext) enrichedOutline += '\n\n【角色与世界设定】\n' + cardContext.slice(0, 1500)
+      cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
         { role: 'user', content: VOLUME_OUTLINE_USER(enrichedOutline, total) },
       ], '卷纲生成')
+      if (cancelledRef.current) return
       const jm = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\[[\s\S]*\]/)
       const vols = JSON.parse(jm ? (jm[1] || jm[0]) : reply)
       await saveVolumes(vols)
       showToast('success', `卷纲完成！共 ${vols.length} 卷`)
+    } catch (e: any) {
+      if (cancelledRef.current) showToast('info', '已取消生成')
+      else showToast('error', '卷纲生成失败：' + (e.message || '未知'))
     } finally { setGenerating(false) }
   }
 
@@ -322,6 +339,7 @@ export default function Workspace() {
     if (!vol) { showToast('error', `第${chapNum}章不属于任何卷，请先调整卷纲`); return }
 
     setGenerating(true)
+    cancelledRef.current = false
     try {
       const { styleContext, disassemblyContext } = getRefs()
       const isFirstChapterInBook = chapNum === 1
@@ -358,6 +376,7 @@ export default function Workspace() {
         { role: 'user', content: promptParts.join('\n\n') + `\n\n请输出第 ${chapNum} 章的细纲JSON对象。` },
       ], `细纲-第${chapNum}章`)
 
+      if (cancelledRef.current) return
       // 尝试多种方式提取 JSON
       let newPlan: ChapterPlan
       try {
@@ -385,7 +404,8 @@ export default function Workspace() {
       await saveChapterPlans(merged)
       showToast('success', `第${chapNum}章细纲已生成：${newPlan.title}`)
     } catch (e: any) {
-      showToast('error', `第${chapNum}章细纲生成失败：${e.message || '未知错误'}`)
+      if (cancelledRef.current) showToast('info', '已取消生成')
+      else showToast('error', `第${chapNum}章细纲生成失败：${e.message || '未知错误'}`)
     } finally {
       setGenerating(false)
     }
@@ -446,9 +466,12 @@ export default function Workspace() {
 
       // 使用流式 API
       let fullText = ''
+      cancelledRef.current = false
       const cleanup = window.electronAPI.onStreamChunk((data) => {
         if (data.error) {
-          showToast('error', '流式生成错误：' + data.error)
+          cancelledRef.current = true
+          setGenerating(false); setStreamingText(''); setGenTarget('')
+          showToast('info', data.error === '已取消' ? '已取消生成' : '流式生成错误：' + data.error)
           return
         }
         if (!data.done && data.chunk) {
@@ -463,6 +486,8 @@ export default function Workspace() {
       ], '章节生成')
 
       cleanup()
+
+      if (cancelledRef.current) return
 
       const finalText = reply || fullText
       setEditingContent(finalText)
@@ -501,7 +526,9 @@ export default function Workspace() {
       } catch { /* 摘要失败不阻塞 */ }
 
       showToast('success', `第${chapNum}章生成完成（含自动摘要）`)
-    } catch (e: any) { showToast('error', '生成失败：' + e.message) }
+    } catch (e: any) {
+      if (!cancelledRef.current) showToast('error', '生成失败：' + e.message)
+    }
     finally { setGenerating(false); setGenTarget(''); setStreamingText('') }
   }
 
@@ -650,6 +677,7 @@ export default function Workspace() {
     if (!window.electronAPI || chapters.length < 2) { showToast('error', '至少需要2章才能校对'); return }
     setReviewing(true)
     setReviewResult(null)
+    cancelledRef.current = false
     try {
       const chapterContents = chapters.map(ch => ({
         num: ch.chapter_number, title: ch.title, content: ch.content,
@@ -669,7 +697,10 @@ export default function Workspace() {
       } else {
         setReviewResult({ overall_report: reply, chapter_fixes: [] })
       }
-    } catch (e: any) { showToast('error', '校对失败：' + (e.message || '未知')) }
+    } catch (e: any) {
+      if (cancelledRef.current) showToast('info', '已取消校对')
+      else showToast('error', '校对失败：' + (e.message || '未知'))
+    }
     finally { setReviewing(false) }
   }
 
@@ -679,6 +710,7 @@ export default function Workspace() {
     const chapter = chapters.find(c => c.chapter_number === chNum)
     if (!chapter?.content) { showToast('error', '该章无内容'); return }
     setFixingChapter(chNum)
+    cancelledRef.current = false
     try {
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: AUTO_FIX_SYSTEM },
@@ -702,7 +734,10 @@ export default function Workspace() {
         modified = modified.slice(0, idx) + f.replace + modified.slice(idx + f.find.length)
       }
       setFixPreview({ chapterNum: chNum, original: chapter.content, modified, skipped })
-    } catch (e: any) { showToast('error', '自动修改失败：' + (e.message || '未知')) }
+    } catch (e: any) {
+      if (cancelledRef.current) showToast('info', '已取消修改')
+      else showToast('error', '自动修改失败：' + (e.message || '未知'))
+    }
     finally { setFixingChapter(null) }
   }
 
@@ -853,14 +888,17 @@ export default function Workspace() {
             第 {selectedChapter} 章 · {chapterPlans.find(p => p.chapter_number === selectedChapter)?.title || '未命名'}
           </span>
           <div className="flex gap-1.5">
-            {generating && genTarget === `第${selectedChapter}章` ? (
-              <span className="px-3 py-1.5 text-xs text-warning flex items-center gap-1">
-                <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 生成中...
-              </span>
+            {generating ? (
+              <div className="flex items-center gap-1.5">
+                <span className="px-3 py-1.5 text-xs text-warning flex items-center gap-1">
+                  <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> {genTarget || '生成中...'}
+                </span>
+                <button onClick={() => handleCancel()} className="px-2 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
+              </div>
             ) : (
-              <button onClick={() => setShowGenPanel(showGenPanel === 'chapter' ? null : 'chapter')} disabled={generating}
-                className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
-                {generating ? '⏳ 生成中...' : editingContent ? '🔄 重新生成' : '🤖 生成本章'}
+              <button onClick={() => setShowGenPanel(showGenPanel === 'chapter' ? null : 'chapter')}
+                className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+                {editingContent ? '🔄 重新生成' : '🤖 生成本章'}
               </button>
             )}
             <button onClick={handleSave} disabled={saving}
@@ -953,10 +991,16 @@ export default function Workspace() {
                 className="w-full px-3 py-1.5 text-xs border border-border-input rounded-btn resize-none focus:outline-none focus:border-primary placeholder:text-text-placeholder"
               />
             </div>
-            <button onClick={confirmGen} disabled={generating}
-              className="px-4 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
-              {generating ? '⏳ 生成中...' : '🤖 确定生成'}
-            </button>
+            {generating ? (
+              <div className="flex gap-2">
+                <span className="px-4 py-2 text-xs text-warning flex items-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 生成中...</span>
+                <button onClick={() => handleCancel()} className="px-4 py-2 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消生成</button>
+              </div>
+            ) : (
+              <button onClick={confirmGen} className="px-4 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+                🤖 确定生成
+              </button>
+            )}
           </div>
         )}
 
@@ -974,6 +1018,7 @@ export default function Workspace() {
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                 <span className="text-xs text-primary">AI 正在写作中...</span>
+                <button onClick={() => handleCancel()} className="ml-auto px-2 py-0.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
               </div>
               <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">
                 {streamingText || '...'}
@@ -1162,16 +1207,23 @@ export default function Workspace() {
 
           {/* 卡片 Tab */}
           {rightTab === 'cards' && (
-            <CardPanel projectId={Number(id)} refreshTrigger={cardRefresh} />
+            <CardPanel projectId={Number(id)} refreshTrigger={cardRefresh} genLoading={cardGenLoading} onGenLoadingChange={setCardGenLoading} />
           )}
 
           {/* 校对 Tab */}
           {rightTab === 'review' && (
             <div className="p-3 overflow-auto flex-1">
-              <button onClick={handleReview} disabled={chapters.length < 2 || reviewing}
-                className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 mb-3">
-                {reviewing ? '⏳ 校对中...' : '🔍 执行校对'}
-              </button>
+              {reviewing ? (
+                <div className="flex gap-2 mb-3">
+                  <span className="flex-1 px-3 py-2 text-xs text-warning flex items-center justify-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 校对中...</span>
+                  <button onClick={() => handleCancel()} className="px-3 py-2 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
+                </div>
+              ) : (
+                <button onClick={handleReview} disabled={chapters.length < 2}
+                  className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 mb-3">
+                  🔍 执行校对
+                </button>
+              )}
 
               {!reviewResult && !reviewing && (
                 <p className="text-xs text-text-placeholder text-center py-8">
@@ -1248,6 +1300,9 @@ export default function Workspace() {
                               disabled={fixingChapter === fix.chapter_number}
                               className="flex-1 px-2 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
                             >{fixingChapter === fix.chapter_number ? '⏳ 修改中...' : '🤖 自动修改'}</button>
+                          {fixingChapter === fix.chapter_number && (
+                            <button onClick={() => handleCancel()} className="px-2 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10 shrink-0">⏹</button>
+                          )}
                           </div>
                         </div>
                       )

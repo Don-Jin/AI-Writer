@@ -197,6 +197,7 @@ export interface ElectronAPI {
   }
   aiChat: (messages: { role: string; content: string }[], purpose?: string) => Promise<string>
   aiChatStream: (messages: { role: string; content: string }[], purpose?: string) => Promise<string>
+  cancelAi: () => void
   onStreamChunk: (callback: (data: { chunk: string; done: boolean; error?: string }) => void) => () => void
   tokens: {
     stats: () => Promise<{ today: { tokens: number; prompt: number; output: number; cached: number; calls: number }; total: { tokens: number; prompt: number; output: number; cached: number; calls: number } }>

@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { initDatabase, query, run, get, closeDatabase } from './database'
 
 let mainWindow: BrowserWindow | null = null
+let currentAbortController: AbortController | null = null
 
 // ==================== 窗口创建 ====================
 
@@ -70,14 +71,6 @@ function recordTokenUsage(purpose: string, model: string, promptTokens: number, 
   )
 }
 
-function notifyTokenUsage(purpose: string, model: string, promptTokens: number, cachedTokens: number, outputTokens: number) {
-  mainWindow?.webContents.send('tokens:last-usage', {
-    purpose, model, promptTokens, cachedTokens, outputTokens,
-    totalTokens: promptTokens + outputTokens,
-    cost: (promptTokens / 1_000_000) * 3 + (outputTokens / 1_000_000) * 6,
-  })
-}
-
 // ==================== IPC 处理器 ====================
 
 function registerIpcHandlers() {
@@ -118,22 +111,26 @@ function registerIpcHandlers() {
       baseURL: config.baseURL,
     })
 
-    const response = await client.chat.completions.create({
-      model: config.model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 4096,
-    })
+    currentAbortController = new AbortController()
+    try {
+      const response = await client.chat.completions.create({
+        model: config.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 4096,
+      }, { signal: currentAbortController.signal })
 
-    if (response.usage) {
-      const promptTokens = response.usage.prompt_tokens || 0
-      const outputTokens = response.usage.completion_tokens || 0
-      const cachedTokens = (response.usage as any).prompt_tokens_details?.cached_tokens || 0
-      recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
-      notifyTokenUsage(purpose || '', config.model, promptTokens, cachedTokens, outputTokens)
+      if (response.usage) {
+        const promptTokens = response.usage.prompt_tokens || 0
+        const outputTokens = response.usage.completion_tokens || 0
+        const cachedTokens = (response.usage as any).prompt_tokens_details?.cached_tokens || 0
+        recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
+      }
+
+      return response.choices[0]?.message?.content || ''
+    } finally {
+      currentAbortController = null
     }
-
-    return response.choices[0]?.message?.content || ''
   })
 
   // ---- AI 流式调用 ----
@@ -149,6 +146,7 @@ function registerIpcHandlers() {
       baseURL: config.baseURL,
     })
 
+    currentAbortController = new AbortController()
     try {
       const stream = await client.chat.completions.create({
         model: config.model,
@@ -157,7 +155,7 @@ function registerIpcHandlers() {
         max_tokens: 4096,
         stream: true,
         stream_options: { include_usage: true },
-      })
+      }, { signal: currentAbortController.signal })
 
       let fullContent = ''
       let promptTokens = 0
@@ -170,7 +168,6 @@ function registerIpcHandlers() {
           fullContent += delta
           mainWindow?.webContents.send('ai:stream-chunk', { chunk: delta, done: false })
         }
-        // 最后一个 chunk 包含 usage 数据
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens || 0
           outputTokens = chunk.usage.completion_tokens || 0
@@ -178,7 +175,6 @@ function registerIpcHandlers() {
         }
       }
 
-      // 如果 API 未返回 usage，用字符数估算（中文字符≈1 token，英文≈0.25 token）
       if (promptTokens === 0 && outputTokens === 0) {
         const promptText = messages.map((m: any) => m.content).join('')
         const cnChars = (promptText.match(/[一-鿿]/g) || []).length
@@ -187,19 +183,27 @@ function registerIpcHandlers() {
         outputTokens = Math.max(1, outCnChars + Math.floor((fullContent.length - outCnChars) / 4))
       }
 
-      // 发送完成信号（附带用量数据）
       mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, usage: { promptTokens, outputTokens, cachedTokens } })
-
-      // 记录 token 用量
       recordTokenUsage(purpose || '', config.model, promptTokens, outputTokens, cachedTokens)
-
-      // 通知用量
       notifyTokenUsage(purpose || '', config.model, promptTokens, cachedTokens, outputTokens)
-
       return fullContent
     } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.message?.includes('abort')) {
+        mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, error: '已取消' })
+        return ''
+      }
       mainWindow?.webContents.send('ai:stream-chunk', { chunk: '', done: true, error: err.message })
       throw err
+    } finally {
+      currentAbortController = null
+    }
+  })
+
+  // ---- 中断 AI 调用 ----
+  ipcMain.on('ai:cancel', () => {
+    if (currentAbortController) {
+      currentAbortController.abort()
+      currentAbortController = null
     }
   })
 

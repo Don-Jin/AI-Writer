@@ -34,15 +34,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  // 中断 AI
+  cancelAi: () => ipcRenderer.send('ai:cancel'),
+
   // Token 用量
   tokens: {
     stats: () => ipcRenderer.invoke('tokens:stats'),
     history: () => ipcRenderer.invoke('tokens:history'),
-    onLastUsage: (callback: (data: { purpose: string; model: string; promptTokens: number; cachedTokens: number; outputTokens: number; totalTokens: number; cost: number }) => void) => {
-      const handler = (_event: any, data: any) => callback(data)
-      ipcRenderer.on('tokens:last-usage', handler)
-      return () => ipcRenderer.removeListener('tokens:last-usage', handler)
-    },
   },
 
   // 文件

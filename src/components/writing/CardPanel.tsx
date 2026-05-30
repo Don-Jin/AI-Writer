@@ -18,10 +18,13 @@ interface Props {
   projectId: number
   refreshTrigger?: number
   onRefresh?: () => void
+  genLoading: boolean
+  onGenLoadingChange: (v: boolean) => void
 }
 
-export default function CardPanel({ projectId, refreshTrigger, onRefresh }: Props) {
-  const [genLoading, setGenLoading] = useState(false)
+export default function CardPanel({ projectId, refreshTrigger, onRefresh, genLoading, onGenLoadingChange }: Props) {
+  const [chapterInput, setChapterInput] = useState('')
+  const [showChapterInput, setShowChapterInput] = useState(false)
   const [tab, setTab] = useState<'characters' | 'world'>('characters')
   const [characters, setCharacters] = useState<CharacterCard[]>([])
   const [worlds, setWorlds] = useState<WorldSetting[]>([])
@@ -63,10 +66,29 @@ export default function CardPanel({ projectId, refreshTrigger, onRefresh }: Prop
 
   const safeJson = (val: string, fallback: any) => { try { return JSON.parse(val) } catch { return fallback } }
 
+  /** 从 AI 回复中提取 JSON，带容错 */
+  const extractJson = (reply: string): any | null => {
+    let clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+    const jm = clean.match(/\{[\s\S]*\}/)
+    if (!jm) return null
+    try { return JSON.parse(jm[0]) } catch {
+      // 尝试修复常见 JSON 错误：移除尾部逗号、修复未闭合字符串
+      try {
+        let fixed = jm[0]
+          .replace(/,\s*}/g, '}')       // trailing comma before }
+          .replace(/,\s*\]/g, ']')       // trailing comma before ]
+          .replace(/\n/g, ' ')           // newlines in strings
+        return JSON.parse(fixed)
+      } catch {
+        return null
+      }
+    }
+  }
+
   // ===== 自动生成角色和世界卡片 =====
   const autoGenerateCards = async () => {
     if (!window.electronAPI) return
-    setGenLoading(true)
+    onGenLoadingChange(true)
     try {
       // 读取大纲
       const outline = await window.electronAPI.db.get(
@@ -125,16 +147,19 @@ ${disContext || '无'}
 请提取角色和世界设定。只输出JSON。` },
       ], '卡片自动生成')
 
-      const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-      const jm = clean.match(/\{[\s\S]*\}/)
-      if (!jm) { showToast('error', 'AI 返回格式异常'); return }
-      const parsed = JSON.parse(jm[0])
+      const parsed = extractJson(reply)
+      if (!parsed) { showToast('error', 'AI 返回格式异常，请重试'); return }
       let charCount = 0, worldCount = 0
 
       // 保存角色
       if (parsed.characters?.length) {
         for (const c of parsed.characters) {
           if (!c.name) continue
+          // 检查重名，跳过已存在的
+          const existing = await window.electronAPI.db.get(
+            'SELECT id FROM character_cards WHERE project_id = ? AND name = ?', [projectId, c.name]
+          )
+          if (existing) continue
           await window.electronAPI.db.run(
             `INSERT INTO character_cards (project_id, name, role_type, personality, background, appearance, abilities, relationships, status_tracking, notes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
             [projectId, c.name, c.role_type || 'support', c.personality || '', c.background || '', c.appearance || '', c.abilities || '',
@@ -148,6 +173,10 @@ ${disContext || '无'}
       if (parsed.worlds?.length) {
         for (const w of parsed.worlds) {
           if (!w.name) continue
+          const existing = await window.electronAPI.db.get(
+            'SELECT id FROM world_settings WHERE project_id = ? AND name = ?', [projectId, w.name]
+          )
+          if (existing) continue
           await window.electronAPI.db.run(
             `INSERT INTO world_settings (project_id, name, category, description, details, trigger_keywords, priority, is_global, notes) VALUES (?,?,?,?,?,?,?,?,?)`,
             [projectId, w.name, w.category || 'general', w.description || '', w.details || '', w.trigger_keywords || '', w.priority || 0, w.is_global || 0, w.notes || '']
@@ -158,9 +187,85 @@ ${disContext || '无'}
 
       loadCards()
       onRefresh?.()
-      showToast('success', `已生成 ${charCount} 个角色 + ${worldCount} 个世界设定`)
-    } catch (e: any) { showToast('error', '自动生成失败：' + (e.message || '未知')) }
-    finally { setGenLoading(false) }
+      const dupInfo = (parsed.characters?.length - charCount) + (parsed.worlds?.length - worldCount)
+      showToast('success', `已生成 ${charCount} 个角色 + ${worldCount} 个设定${dupInfo > 0 ? `（跳过 ${dupInfo} 个重复）` : ''}`)
+    } catch (e: any) {
+      const msg = e.message || '未知'
+      if (msg.includes('abort') || msg.includes('Abort')) showToast('info', '已取消生成')
+      else showToast('error', '自动生成失败：' + msg)
+    }
+    finally { onGenLoadingChange(false) }
+  }
+
+  // ===== 从选定章节生成角色和设定 =====
+  const doGenerateFromChapters = async (input: string) => {
+    if (!window.electronAPI) return
+    const nums = input.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
+    if (!nums.length) { showToast('error', '请输入有效的章节号'); return }
+    setShowChapterInput(false); setChapterInput('')
+    onGenLoadingChange(true)
+    try {
+      const chapters = await window.electronAPI.db.query(
+        `SELECT chapter_number, title, content FROM chapters WHERE project_id = ? AND chapter_number IN (${nums.join(',')}) ORDER BY chapter_number`,
+        [projectId]
+      )
+      if (!chapters.length) { showToast('error', '未找到指定章节，请先生成章节内容'); return }
+
+      const chText = (chapters as any[]).map((ch: any) =>
+        `### 第${ch.chapter_number}章 ${ch.title}\n${(ch.content || '').slice(0, 3000)}`
+      ).join('\n\n---\n\n')
+
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: `你是小说设定提取专家。根据章节正文，提取其中出现的角色和世界设定。
+
+## 输出格式
+严格的JSON：{"characters":[{角色信息}],"worlds":[{设定信息}]}
+
+## 注意
+- 只提取章节中实际出现的角色和设定
+- 角色字段：name, role_type(main/antagonist/support/minor), personality, background, appearance, abilities, relationships, status_tracking, notes
+- 设定字段：name, category(location/faction/rule/timeline/general), description, details, trigger_keywords, priority, is_global, notes
+- 如果信息不足，字段留空字符串` },
+        { role: 'user', content: `【章节内容】\n${chText}\n\n请提取角色和设定。只输出JSON。` },
+      ], '卡片-从章节生成')
+
+      const parsed = extractJson(reply)
+      if (!parsed) { showToast('error', 'AI 返回格式异常，请重试'); return }
+      let charCount = 0, worldCount = 0
+
+      if (parsed.characters?.length) {
+        for (const c of parsed.characters) {
+          if (!c.name) continue
+          const existing = await window.electronAPI.db.get('SELECT id FROM character_cards WHERE project_id = ? AND name = ?', [projectId, c.name])
+          if (existing) continue
+          await window.electronAPI.db.run(
+            `INSERT INTO character_cards (project_id, name, role_type, personality, background, appearance, abilities, relationships, status_tracking, notes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+            [projectId, c.name, c.role_type || 'support', c.personality || '', c.background || '', c.appearance || '', c.abilities || '',
+              JSON.stringify(c.relationships || []), JSON.stringify(c.status_tracking || {}), c.notes || '']
+          )
+          charCount++
+        }
+      }
+      if (parsed.worlds?.length) {
+        for (const w of parsed.worlds) {
+          if (!w.name) continue
+          const existing = await window.electronAPI.db.get('SELECT id FROM world_settings WHERE project_id = ? AND name = ?', [projectId, w.name])
+          if (existing) continue
+          await window.electronAPI.db.run(
+            `INSERT INTO world_settings (project_id, name, category, description, details, trigger_keywords, priority, is_global, notes) VALUES (?,?,?,?,?,?,?,?,?)`,
+            [projectId, w.name, w.category || 'general', w.description || '', w.details || '', w.trigger_keywords || '', w.priority || 0, w.is_global || 0, w.notes || '']
+          )
+          worldCount++
+        }
+      }
+      loadCards(); onRefresh?.()
+      showToast('success', `从章节生成了 ${charCount} 个角色 + ${worldCount} 个设定`)
+    } catch (e: any) {
+      const msg = e.message || '未知'
+      if (msg.includes('abort') || msg.includes('Abort')) showToast('info', '已取消生成')
+      else showToast('error', '生成失败：' + msg)
+    }
+    finally { onGenLoadingChange(false) }
   }
 
   // ===== 角色卡片表单 =====
@@ -178,6 +283,30 @@ ${disContext || '无'}
     const [location, setLocation] = useState(initial?.status_tracking?.location || '')
     const [goal, setGoal] = useState(initial?.status_tracking?.goal || '')
     const [notes, setNotes] = useState(initial?.notes || '')
+    const [localLoading, setLocalLoading] = useState(false)
+
+    const aiAutocomplete = async () => {
+      if (!name.trim()) { showToast('error', '请先输入角色名'); return }
+      if (!window.electronAPI) return
+      setLocalLoading(true)
+      try {
+        const outline = await window.electronAPI.db.get('SELECT content FROM outlines WHERE project_id = ? ORDER BY version DESC LIMIT 1', [projectId])
+        const reply = await window.electronAPI.aiChat([
+          { role: 'system', content: '你是小说角色设计师。根据角色名和大纲，补全角色的详细信息。只输出JSON：{"personality":"性格","background":"背景","appearance":"外貌","abilities":"能力","notes":"备注"}。不要在JSON外加任何文字。' },
+          { role: 'user', content: `角色名：${name}\n\n大纲：${(outline?.content || '').slice(0, 3000)}` },
+        ], 'AI补全角色')
+        const d = extractJson(reply)
+        if (d) {
+          if (!personality && d.personality) setPersonality(d.personality)
+          if (!background && d.background) setBackground(d.background)
+          if (!appearance && d.appearance) setAppearance(d.appearance)
+          if (!abilities && d.abilities) setAbilities(d.abilities)
+          if (!notes && d.notes) setNotes(d.notes)
+          showToast('success', 'AI 已补全信息，请检查后保存')
+        }
+      } catch (e: any) { showToast('error', '补全失败') }
+      finally { setLocalLoading(false) }
+    }
 
     const save = async () => {
       if (!name.trim()) { showToast('error', '请输入角色名称'); return }
@@ -273,6 +402,10 @@ ${disContext || '无'}
             </div>
           </div>
           <div className="px-4 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+            <button onClick={aiAutocomplete} disabled={localLoading}
+              className="px-4 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20 disabled:opacity-50">
+              {localLoading ? '⏳' : '🤖 AI 补全'}
+            </button>
             <button onClick={closeCharForm} className="px-4 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary">取消</button>
             <button onClick={save} className="px-4 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">保存</button>
           </div>
@@ -291,6 +424,30 @@ ${disContext || '无'}
     const [priority, setPriority] = useState(initial?.priority || 0)
     const [isGlobal, setIsGlobal] = useState(initial?.is_global === 1)
     const [notes, setNotes] = useState(initial?.notes || '')
+    const [localLoading, setLocalLoading] = useState(false)
+
+    const aiAutocomplete = async () => {
+      if (!name.trim()) { showToast('error', '请先输入设定名称'); return }
+      if (!window.electronAPI) return
+      setLocalLoading(true)
+      try {
+        const outline = await window.electronAPI.db.get('SELECT content FROM outlines WHERE project_id = ? ORDER BY version DESC LIMIT 1', [projectId])
+        const reply = await window.electronAPI.aiChat([
+          { role: 'system', content: '你是小说世界观设计师。根据设定名称和大纲，补全世界设定的详细信息。只输出JSON：{"category":"location/faction/rule/timeline/general","description":"简述","details":"详细内容","trigger_keywords":"关键词1,关键词2","notes":"备注"}。不要在JSON外加任何文字。' },
+          { role: 'user', content: `设定名称：${name}\n\n大纲：${(outline?.content || '').slice(0, 3000)}` },
+        ], 'AI补全设定')
+        const d = extractJson(reply)
+        if (d) {
+          if (!category || category === 'general') { const cats: WorldCategory[] = ['location','faction','rule','timeline','general']; if (cats.includes(d.category)) setCategory(d.category) }
+          if (!description && d.description) setDesc(d.description)
+          if (!details && d.details) setDetails(d.details)
+          if (!triggerKeywords && d.trigger_keywords) setKeywords(d.trigger_keywords)
+          if (!notes && d.notes) setNotes(d.notes)
+          showToast('success', 'AI 已补全信息，请检查后保存')
+        }
+      } catch (e: any) { showToast('error', '补全失败') }
+      finally { setLocalLoading(false) }
+    }
 
     const save = async () => {
       if (!name.trim()) { showToast('error', '请输入设定名称'); return }
@@ -365,6 +522,10 @@ ${disContext || '无'}
             </div>
           </div>
           <div className="px-4 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+            <button onClick={aiAutocomplete} disabled={localLoading}
+              className="px-4 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20 disabled:opacity-50">
+              {localLoading ? '⏳' : '🤖 AI 补全'}
+            </button>
             <button onClick={closeWorldForm} className="px-4 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary">取消</button>
             <button onClick={save} className="px-4 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">保存</button>
           </div>
@@ -411,14 +572,30 @@ ${disContext || '无'}
         {/* 角色卡片列表 */}
         {tab === 'characters' && (
           <div className="p-2 space-y-1.5">
-            <button onClick={autoGenerateCards} disabled={genLoading}
-              className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 transition-colors">
-              {genLoading ? '⏳ 分析中...' : '🤖 从大纲/拆文自动生成角色和设定'}
-            </button>
-            <button onClick={() => setShowCharForm(true)}
-              className="w-full px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
-              ＋ 新建角色
-            </button>
+            {genLoading ? (
+              <div className="flex gap-1.5">
+                <span className="flex-1 px-3 py-2 text-xs text-warning flex items-center justify-center gap-1 rounded-btn bg-warning/10">
+                  <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 分析中...
+                </span>
+                <button onClick={() => window.electronAPI?.cancelAi()} className="px-3 py-2 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹</button>
+              </div>
+            ) : (
+              <button onClick={autoGenerateCards}
+                className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors">
+                🤖 从大纲/拆文自动生成角色和设定
+              </button>
+            )}
+            <div className="flex gap-1.5">
+              <button onClick={() => setShowCharForm(true)}
+                className="flex-1 px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
+                ＋ 新建角色
+              </button>
+              <button onClick={() => setShowChapterInput(true)} disabled={genLoading}
+                className="px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors"
+                title="从已生成的章节提取角色和设定">
+                📖 从章节提取
+              </button>
+            </div>
             {characters.length === 0 ? (
               <p className="text-xs text-text-placeholder text-center py-6">暂无角色卡片</p>
             ) : (
@@ -442,22 +619,22 @@ ${disContext || '无'}
                         {char.background && <div className="text-xs"><span className="text-text-placeholder">背景：</span>{char.background}</div>}
                         {char.appearance && <div className="text-xs"><span className="text-text-placeholder">外貌：</span>{char.appearance}</div>}
                         {char.abilities && <div className="text-xs"><span className="text-text-placeholder">能力：</span>{char.abilities}</div>}
-                        {char.relationships && (char.relationships as any[]).length > 0 && (
+                        {(() => { try { const rels = Array.isArray(char.relationships) ? char.relationships : (typeof char.relationships === 'string' ? JSON.parse(char.relationships) : []); return rels.length > 0 && (
                           <div className="text-xs">
                             <span className="text-text-placeholder">关系：</span>
-                            {(char.relationships as any[]).map((r, i) => (
+                            {rels.map((r: any, i: number) => (
                               <span key={i} className="inline-block mr-2 bg-bg-secondary px-1 rounded">{r.name}（{r.relation}）</span>
                             ))}
                           </div>
-                        )}
-                        {char.status_tracking && Object.keys(char.status_tracking).length > 0 && (
+                        )} catch { return null } })()}
+                        {(() => { try { const st = typeof char.status_tracking === 'string' ? JSON.parse(char.status_tracking) : (char.status_tracking || {}); return Object.keys(st).length > 0 && (
                           <div className="text-xs">
                             <span className="text-text-placeholder">状态：</span>
-                            {char.status_tracking.location && <span>📍{char.status_tracking.location} </span>}
-                            {char.status_tracking.current_status && <span>{char.status_tracking.current_status} </span>}
-                            {char.status_tracking.goal && <span>→ {char.status_tracking.goal}</span>}
+                            {st.location && <span>📍{st.location} </span>}
+                            {st.current_status && <span>{st.current_status} </span>}
+                            {st.goal && <span>→ {st.goal}</span>}
                           </div>
-                        )}
+                        );} catch { return null } })()}
                         <div className="flex gap-2 pt-1">
                           <button onClick={() => { setEditingChar(char); setShowCharForm(true) }}
                             className="text-xs text-primary hover:underline">编辑</button>
@@ -476,14 +653,30 @@ ${disContext || '无'}
         {/* 世界设定列表 */}
         {tab === 'world' && (
           <div className="p-2 space-y-1.5">
-            <button onClick={autoGenerateCards} disabled={genLoading}
-              className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 transition-colors">
-              {genLoading ? '⏳ 分析中...' : '🤖 从大纲/拆文自动生成角色和设定'}
-            </button>
-            <button onClick={() => setShowWorldForm(true)}
-              className="w-full px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
-              ＋ 新建设定
-            </button>
+            {genLoading ? (
+              <div className="flex gap-1.5">
+                <span className="flex-1 px-3 py-2 text-xs text-warning flex items-center justify-center gap-1 rounded-btn bg-warning/10">
+                  <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 分析中...
+                </span>
+                <button onClick={() => window.electronAPI?.cancelAi()} className="px-3 py-2 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹</button>
+              </div>
+            ) : (
+              <button onClick={autoGenerateCards}
+                className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors">
+                🤖 从大纲/拆文自动生成角色和设定
+              </button>
+            )}
+            <div className="flex gap-1.5">
+              <button onClick={() => setShowWorldForm(true)}
+                className="flex-1 px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
+                ＋ 新建设定
+              </button>
+              <button onClick={() => setShowChapterInput(true)} disabled={genLoading}
+                className="px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors"
+                title="从已生成的章节提取角色和设定">
+                📖 从章节提取
+              </button>
+            </div>
             {worlds.length === 0 ? (
               <p className="text-xs text-text-placeholder text-center py-6">暂无世界设定</p>
             ) : (
@@ -533,6 +726,27 @@ ${disContext || '无'}
       {/* 表单弹窗 */}
       {showCharForm && <CharForm initial={editingChar || undefined} />}
       {showWorldForm && <WorldForm initial={editingWorld || undefined} />}
+
+      {/* 章节号输入弹窗 */}
+      {showChapterInput && (
+        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setShowChapterInput(false)}>
+          <div className="bg-white rounded-card shadow-xl w-80 mx-4 p-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-medium mb-3">从章节提取角色和设定</h3>
+            <input
+              value={chapterInput}
+              onChange={e => setChapterInput(e.target.value)}
+              placeholder="输入章节号，逗号分隔，如 1,2,3"
+              className="w-full px-3 py-2 text-xs border border-border-input rounded-btn mb-3 focus:outline-none focus:border-primary"
+              onKeyDown={e => { if (e.key === 'Enter') doGenerateFromChapters(chapterInput) }}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowChapterInput(false)} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary">取消</button>
+              <button onClick={() => doGenerateFromChapters(chapterInput)} className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn">确定</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
