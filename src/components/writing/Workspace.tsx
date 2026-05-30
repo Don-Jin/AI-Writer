@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
+import CardPanel from './CardPanel'
 
 import {
   PREPARE_SYSTEM, PREPARE_USER,
@@ -89,7 +90,7 @@ export default function Workspace() {
   const [generating, setGenerating] = useState(false)
   const [genTarget, setGenTarget] = useState('')
   const [saving, setSaving] = useState(false)
-  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'review'>('outline')
+  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'cards' | 'review'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
   const [reviewResult, setReviewResult] = useState<{ overall_report: string; chapter_fixes: ChapterFix[] } | null>(null)
   const [reviewing, setReviewing] = useState(false)
@@ -107,6 +108,7 @@ export default function Workspace() {
 
   const [characters, setCharacters] = useState<CharacterCard[]>([])
   const [worlds, setWorlds] = useState<WorldSetting[]>([])
+  const [cardRefresh, setCardRefresh] = useState(0)
 
   // 流式生成
   const [streamingText, setStreamingText] = useState('')
@@ -1000,13 +1002,13 @@ export default function Workspace() {
       <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
         {/* Tab 切换 */}
         <div className="flex border-b border-border shrink-0">
-          {(['outline', 'volumes', 'review'] as const).map(tab => (
+          {(['outline', 'volumes', 'cards', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
               className={`flex-1 py-2 text-xs font-medium transition-colors
                 ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
               `}>
-              {{ outline: '📐 大纲', volumes: '📑 细纲', review: '🔍 校对' }[tab]}
+              {{ outline: '📐 大纲', volumes: '📑 细纲', cards: '🃏 卡片', review: '🔍 校对' }[tab]}
             </button>
           ))}
         </div>
@@ -1156,6 +1158,11 @@ export default function Workspace() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* 卡片 Tab */}
+          {rightTab === 'cards' && (
+            <CardPanel projectId={Number(id)} refreshTrigger={cardRefresh} />
           )}
 
           {/* 校对 Tab */}

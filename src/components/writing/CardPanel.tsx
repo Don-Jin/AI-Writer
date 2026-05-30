@@ -17,9 +17,11 @@ const CATEGORY_LABELS: Record<WorldCategory, string> = {
 interface Props {
   projectId: number
   refreshTrigger?: number
+  onRefresh?: () => void
 }
 
-export default function CardPanel({ projectId, refreshTrigger }: Props) {
+export default function CardPanel({ projectId, refreshTrigger, onRefresh }: Props) {
+  const [genLoading, setGenLoading] = useState(false)
   const [tab, setTab] = useState<'characters' | 'world'>('characters')
   const [characters, setCharacters] = useState<CharacterCard[]>([])
   const [worlds, setWorlds] = useState<WorldSetting[]>([])
@@ -60,6 +62,106 @@ export default function CardPanel({ projectId, refreshTrigger }: Props) {
   useEffect(() => { loadCards() }, [loadCards, refreshTrigger])
 
   const safeJson = (val: string, fallback: any) => { try { return JSON.parse(val) } catch { return fallback } }
+
+  // ===== 自动生成角色和世界卡片 =====
+  const autoGenerateCards = async () => {
+    if (!window.electronAPI) return
+    setGenLoading(true)
+    try {
+      // 读取大纲
+      const outline = await window.electronAPI.db.get(
+        'SELECT content FROM outlines WHERE project_id = ? ORDER BY version DESC LIMIT 1', [projectId]
+      )
+      // 读取拆文库引用
+      const proj = await window.electronAPI.db.get(
+        'SELECT primary_style_id, auxiliary_style_ids FROM novel_projects WHERE id = ?', [projectId]
+      )
+      let disContext = ''
+      if (proj?.primary_style_id || proj?.auxiliary_style_ids) {
+        const dissIds = JSON.parse(proj.auxiliary_style_ids || '[]')
+        if (proj.primary_style_id) dissIds.unshift(proj.primary_style_id)
+        // Actually primary_style_id is for style library, not disassembly. Let's read disassembly projects separately.
+      }
+      // Read disassembly projects
+      const dissProjs = await window.electronAPI.db.query(
+        'SELECT name, stage_results FROM disassembly_projects WHERE current_stage >= 1 ORDER BY updated_at DESC LIMIT 3'
+      )
+      if (dissProjs.length) {
+        disContext = dissProjs.map((d: any) => {
+          const r = safeJson(d.stage_results, {})
+          return `【参考书】${d.name}\n${[r.stage0, r.stage1, r.stage3].filter(Boolean).join('\n').slice(0, 2000)}`
+        }).join('\n\n---\n\n')
+      }
+
+      const reply = await window.electronAPI.aiChat([
+        { role: 'system', content: `你是小说设定提取专家。根据大纲和拆文参考，自动提取角色和世界设定。
+
+## 角色提取规则
+1. 从大纲中识别所有重要角色（主角、反派、盟友、次要角色）
+2. 为每个角色提取：姓名、角色类型(main/antagonist/support/minor)、性格、背景、外貌、能力
+3. 分析角色之间的关系
+
+## 世界设定提取规则
+1. 从大纲中识别所有重要地点、势力、规则体系
+2. 分类：地点(location)/势力(faction)/规则(rule)/时间线(timeline)/通用(general)
+3. 为每个设定标注触发关键词
+
+## 输出格式
+严格的JSON，不要markdown代码块：
+{
+  "characters": [
+    { "name": "角色名", "role_type": "main", "personality": "性格", "background": "背景", "appearance": "外貌", "abilities": "能力", "relationships": [{"name":"相关角色","relation":"关系描述","description":"说明"}], "status_tracking": {"current_status": "存活","location":"初始位置","goal":"目标"}, "notes": "" }
+  ],
+  "worlds": [
+    { "name": "设定名", "category": "location", "description": "简述", "details": "详细内容", "trigger_keywords": "关键词1,关键词2", "priority": 1, "is_global": 0, "notes": "" }
+  ]
+}` },
+        { role: 'user', content: `【大纲】
+${(outline?.content || '暂无大纲').slice(0, 5000)}
+
+【拆文参考】
+${disContext || '无'}
+
+请提取角色和世界设定。只输出JSON。` },
+      ], '卡片自动生成')
+
+      const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+      const jm = clean.match(/\{[\s\S]*\}/)
+      if (!jm) { showToast('error', 'AI 返回格式异常'); return }
+      const parsed = JSON.parse(jm[0])
+      let charCount = 0, worldCount = 0
+
+      // 保存角色
+      if (parsed.characters?.length) {
+        for (const c of parsed.characters) {
+          if (!c.name) continue
+          await window.electronAPI.db.run(
+            `INSERT INTO character_cards (project_id, name, role_type, personality, background, appearance, abilities, relationships, status_tracking, notes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+            [projectId, c.name, c.role_type || 'support', c.personality || '', c.background || '', c.appearance || '', c.abilities || '',
+              JSON.stringify(c.relationships || []), JSON.stringify(c.status_tracking || {}), c.notes || '']
+          )
+          charCount++
+        }
+      }
+
+      // 保存世界设定
+      if (parsed.worlds?.length) {
+        for (const w of parsed.worlds) {
+          if (!w.name) continue
+          await window.electronAPI.db.run(
+            `INSERT INTO world_settings (project_id, name, category, description, details, trigger_keywords, priority, is_global, notes) VALUES (?,?,?,?,?,?,?,?,?)`,
+            [projectId, w.name, w.category || 'general', w.description || '', w.details || '', w.trigger_keywords || '', w.priority || 0, w.is_global || 0, w.notes || '']
+          )
+          worldCount++
+        }
+      }
+
+      loadCards()
+      onRefresh?.()
+      showToast('success', `已生成 ${charCount} 个角色 + ${worldCount} 个世界设定`)
+    } catch (e: any) { showToast('error', '自动生成失败：' + (e.message || '未知')) }
+    finally { setGenLoading(false) }
+  }
 
   // ===== 角色卡片表单 =====
   const CharForm = ({ initial }: { initial?: CharacterCard }) => {
@@ -309,6 +411,10 @@ export default function CardPanel({ projectId, refreshTrigger }: Props) {
         {/* 角色卡片列表 */}
         {tab === 'characters' && (
           <div className="p-2 space-y-1.5">
+            <button onClick={autoGenerateCards} disabled={genLoading}
+              className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 transition-colors">
+              {genLoading ? '⏳ 分析中...' : '🤖 从大纲/拆文自动生成角色和设定'}
+            </button>
             <button onClick={() => setShowCharForm(true)}
               className="w-full px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
               ＋ 新建角色
@@ -370,6 +476,10 @@ export default function CardPanel({ projectId, refreshTrigger }: Props) {
         {/* 世界设定列表 */}
         {tab === 'world' && (
           <div className="p-2 space-y-1.5">
+            <button onClick={autoGenerateCards} disabled={genLoading}
+              className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 transition-colors">
+              {genLoading ? '⏳ 分析中...' : '🤖 从大纲/拆文自动生成角色和设定'}
+            </button>
             <button onClick={() => setShowWorldForm(true)}
               className="w-full px-3 py-2 text-xs border border-dashed border-primary/30 rounded-card text-primary hover:bg-primary-light/30 transition-colors">
               ＋ 新建设定
