@@ -6,6 +6,21 @@ import { initDatabase, query, run, get, closeDatabase } from './database'
 let mainWindow: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
 
+// 清理消息内容中的危险字符（安全网，防止 400 错误）
+function sanitizeMessages(messages: any[]): any[] {
+  return messages.map(m => ({
+    ...m,
+    content: typeof m.content === 'string'
+      ? m.content
+          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+          .replace(/\\x[0-9a-fA-F]{0,2}/gi, '')
+          .replace(/\\u[0-9a-fA-F]{0,4}/gi, '')
+          .replace(/\0/g, '')
+          .replace(/\\(?!["\\/bfnrtu])/g, '')
+      : m.content
+  }))
+}
+
 // ==================== 窗口创建 ====================
 
 function createWindow() {
@@ -105,6 +120,8 @@ function registerIpcHandlers() {
       throw new Error('请先在设置页面配置 API Key')
     }
 
+    const safeMessages = sanitizeMessages(messages)
+
     const { default: OpenAI } = await import('openai')
     const client = new OpenAI({
       apiKey: config.apiKey,
@@ -115,7 +132,7 @@ function registerIpcHandlers() {
     try {
       const response = await client.chat.completions.create({
         model: config.model,
-        messages,
+        messages: safeMessages,
         temperature: 0.7,
         max_tokens: 4096,
       }, { signal: currentAbortController.signal })
@@ -140,6 +157,8 @@ function registerIpcHandlers() {
       throw new Error('请先在设置页面配置 API Key')
     }
 
+    const safeMessages = sanitizeMessages(messages)
+
     const { default: OpenAI } = await import('openai')
     const client = new OpenAI({
       apiKey: config.apiKey,
@@ -150,7 +169,7 @@ function registerIpcHandlers() {
     try {
       const stream = await client.chat.completions.create({
         model: config.model,
-        messages,
+        messages: safeMessages,
         temperature: 0.7,
         max_tokens: 4096,
         stream: true,

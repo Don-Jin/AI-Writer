@@ -12,12 +12,13 @@
  * 清理文本中的危险控制字符和非法转义序列
  * 移除所有 \x 和 \u 序列（这些在通过 API JSON 传输时会出错）
  */
-function sanitizeText(text: string): string {
+export function sanitizeText(text: string): string {
   return text
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 移除控制字符
-    .replace(/\\x[0-9a-fA-F]{0,2}/g, '')               // 移除所有 \x 序列（完整或不完整）
-    .replace(/\\u[0-9a-fA-F]{0,4}/g, '')               // 移除所有 \u 序列
+    .replace(/\\x[0-9a-fA-F]{0,2}/gi, '')              // 移除所有 \x/\X 序列（完整或不完整）
+    .replace(/\\u[0-9a-fA-F]{0,4}/gi, '')              // 移除所有 \u/\U 序列
     .replace(/\0/g, '')                                  // 空字符
+    .replace(/\\(?!["\\/bfnrtu])/g, '')                 // 移除孤立的非 JSON 转义反斜杠
 }
 
 /**
