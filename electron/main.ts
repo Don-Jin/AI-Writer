@@ -7,15 +7,13 @@ let mainWindow: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
 
 // 清理消息内容中的危险字符（安全网，防止 400 错误）
-// DeepSeek API 对有问题的转义序列非常敏感，直接删除所有反斜杠是最稳妥的做法
-// 中文小说中反斜杠极其罕见，删除不影响内容
 function sanitizeMessages(messages: any[]): any[] {
   return messages.map(m => ({
     ...m,
     content: typeof m.content === 'string'
       ? m.content
           .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 控制字符
-          .replace(/\\/g, '')                                   // 删除所有反斜杠（根除 \x \u 等转义序列）
+          .replace(/\\/g, '')                                   // 删除所有反斜杠
           .replace(/\0/g, '')                                   // 空字符
       : m.content
   }))
@@ -292,7 +290,38 @@ function registerIpcHandlers() {
     const ext = filePath.split('.').pop()?.toLowerCase()
 
     if (ext === 'txt') {
-      return readFileSync(filePath, 'utf-8')
+      const buf = readFileSync(filePath)
+      // 检测 BOM
+      if (buf[0] === 0xFF && buf[1] === 0xFE) {
+        return buf.toString('utf16le')
+      }
+      if (buf[0] === 0xFE && buf[1] === 0xFF) {
+        return buf.toString('utf16be')
+      }
+      // 尝试 UTF-8 解码
+      try {
+        const utf8Str = buf.toString('utf-8')
+        // 检查是否有大量替换字符 (U+FFFD)，即解码失败的标志
+        const replacementCount = (utf8Str.match(/�/g) || []).length
+        if (replacementCount < utf8Str.length * 0.01) {
+          // 少于 1% 的替换字符，视为有效 UTF-8
+          return utf8Str
+        }
+      } catch {}
+      // 回退到 GBK（中文 Windows 最常见的编码）
+      try {
+        const decoder = new TextDecoder('gbk')
+        return decoder.decode(buf)
+      } catch {
+        // TextDecoder 可能不支持 gbk，尝试 gb2312
+        try {
+          const decoder = new TextDecoder('gb2312')
+          return decoder.decode(buf)
+        } catch {
+          // 最后回退：用 latin1 然后让 sanitizeText 处理
+          return buf.toString('utf-8')
+        }
+      }
     }
 
     if (ext === 'docx') {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Modal from '../common/Modal'
 import { showToast } from '../common/Toast'
@@ -16,6 +16,7 @@ export default function LibraryList() {
   const [fileName, setFileName] = useState('')
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState('')
+  const cancelledRef = useRef(false)
 
   const { libraries, loaded, load, create, remove } = useLibraryStore()
 
@@ -55,6 +56,7 @@ export default function LibraryList() {
       return
     }
 
+    cancelledRef.current = false
     setImporting(true)
     try {
       let text = ''
@@ -80,6 +82,7 @@ export default function LibraryList() {
         { role: 'user' as const, content: STYLE_EXTRACTION_USER(text) },
       ]
       const reply = await window.electronAPI.aiChat(messages, '风格提取')
+      if (cancelledRef.current) return
 
       // 步骤 3：解析 JSON 结果
       setImportProgress('正在保存风格库...')
@@ -111,6 +114,7 @@ export default function LibraryList() {
       setModalOpen(false)
       resetForm()
     } catch (e: any) {
+      if (cancelledRef.current) return
       showToast('error', '导入失败：' + (e.message || '未知错误'))
     } finally {
       setImporting(false)
@@ -146,6 +150,14 @@ export default function LibraryList() {
     setMode('file')
   }
 
+  const handleCancelImport = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+    setImporting(false)
+    setImportProgress('')
+    showToast('success', '已取消导入')
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -177,7 +189,7 @@ export default function LibraryList() {
       <Modal
         open={modalOpen}
         title="导入小说 · 创建风格库"
-        onClose={() => { if (!importing) { setModalOpen(false); resetForm() } }}
+        onClose={() => { importing ? handleCancelImport() : (setModalOpen(false), resetForm()) }}
         width="max-w-lg"
         footer={
           !importing ? (
@@ -195,7 +207,14 @@ export default function LibraryList() {
                 开始分析
               </button>
             </>
-          ) : undefined
+          ) : (
+            <button
+              onClick={handleCancelImport}
+              className="px-4 py-2 border border-danger text-danger rounded-btn hover:bg-danger/10 transition-colors"
+            >
+              ⏹ 取消分析
+            </button>
+          )
         }
       >
         {importing ? (
