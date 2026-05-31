@@ -7,16 +7,16 @@ let mainWindow: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
 
 // 清理消息内容中的危险字符（安全网，防止 400 错误）
+// DeepSeek API 对有问题的转义序列非常敏感，直接删除所有反斜杠是最稳妥的做法
+// 中文小说中反斜杠极其罕见，删除不影响内容
 function sanitizeMessages(messages: any[]): any[] {
   return messages.map(m => ({
     ...m,
     content: typeof m.content === 'string'
       ? m.content
-          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-          .replace(/\\x[0-9a-fA-F]{0,2}/gi, '')
-          .replace(/\\u[0-9a-fA-F]{0,4}/gi, '')
-          .replace(/\0/g, '')
-          .replace(/\\(?!["\\/bfnrtu])/g, '')
+          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 控制字符
+          .replace(/\\/g, '')                                   // 删除所有反斜杠（根除 \x \u 等转义序列）
+          .replace(/\0/g, '')                                   // 空字符
       : m.content
   }))
 }
