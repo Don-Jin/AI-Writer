@@ -3,6 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
 import CardPanel from './CardPanel'
+import ForeshadowingPanel from './ForeshadowingPanel'
+import TimelinePanel from './TimelinePanel'
+import CanonFactPanel from './CanonFactPanel'
 
 import {
   PREPARE_SYSTEM, PREPARE_USER,
@@ -12,6 +15,7 @@ import {
   CHAPTER_SYSTEM, CHAPTER_USER,
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
   CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
+  CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER,
   buildCharacterContext, buildWorldContext,
   REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
@@ -98,7 +102,7 @@ export default function Workspace() {
   const [generating, setGenerating] = useState(false)
   const [genTarget, setGenTarget] = useState('')
   const [saving, setSaving] = useState(false)
-  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'cards' | 'review'>('outline')
+  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'cards' | 'review' | 'foreshadowing' | 'timeline' | 'canon'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
   const [reviewResult, setReviewResult] = useState<{ overall_report: string; chapter_fixes: ChapterFix[] } | null>(null)
   const [reviewing, setReviewing] = useState(false)
@@ -312,6 +316,28 @@ export default function Workspace() {
       if (cancelledRef.current) return
       await saveOutline(reply)
       showToast('success', '大纲已生成')
+      // 后台自动提取事实簿
+      ;(async () => {
+        try {
+          const fm = [
+            { role: 'system' as const, content: CANON_EXTRACTION_SYSTEM },
+            { role: 'user' as const, content: CANON_EXTRACTION_USER(reply) },
+          ]
+          const cr = await window.electronAPI!.aiChat(fm, '事实簿提取')
+          const clean = cr.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+          const jm = clean.match(/\[[\s\S]*\]/)
+          if (jm) {
+            const arr = JSON.parse(jm[0])
+            await window.electronAPI!.db.run('DELETE FROM canon_facts WHERE project_id = ? AND source = ?', [Number(id), '大纲'])
+            for (const f of arr) {
+              await window.electronAPI!.db.run(
+                `INSERT INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter) VALUES (?,?,?,?,?,?,0)`,
+                [Number(id), f.fact_category, f.fact_key, f.fact_value, f.is_hard_rule ? 1 : 0, '大纲']
+              )
+            }
+          }
+        } catch {}
+      })()
     } catch (e: any) {
       if (cancelledRef.current) showToast('info', '已取消生成')
       else showToast('error', '大纲生成失败：' + (e.message || '未知'))
@@ -512,13 +538,28 @@ export default function Workspace() {
         if (prevSummary?.summary) prevSummaryContext = `\n\n【前一章摘要（记录官）】\n${prevSummary.summary}`
       } catch {}
 
+      // 事实簿（硬规则注入）
+      let canonFactsContext = ''
+      try {
+        const hardFacts = await window.electronAPI.db.query(
+          'SELECT fact_category, fact_key, fact_value FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1',
+          [Number(id)]
+        )
+        if (hardFacts.length > 0) {
+          canonFactsContext = hardFacts.map((f: any) =>
+            `- [${f.fact_category}] ${f.fact_key}: ${f.fact_value}`
+          ).join('\n')
+        }
+      } catch {}
+
       const planAny = plan as any
       let userPrompt = CHAPTER_USER(
         project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
         plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
         planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
         styleContext, plotSummary, charState, prevExcerpt,
-        (disassemblyContext + '\n\n' + volContext + prevSummaryContext)
+        (disassemblyContext + '\n\n' + volContext + prevSummaryContext),
+        canonFactsContext
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
 
       // 注入卡片上下文
@@ -588,6 +629,32 @@ export default function Workspace() {
               await window.electronAPI!.db.run(
                 `INSERT INTO chapter_summaries (project_id,chapter_number,summary,characters_appeared,locations,key_events,foreshadowing_planted,foreshadowing_recovered,character_changes,world_changes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
                 [Number(id), chapNum, ...data]
+              )
+            }
+            // 同步伏笔注册表
+            const pid = Number(id)
+            const planted: string[] = Array.isArray(s.foreshadowing_planted) ? s.foreshadowing_planted : []
+            for (let fi = 0; fi < planted.length; fi++) {
+              const nextId = `F${String(chapNum).padStart(3,'0')}-${fi+1}`
+              await window.electronAPI!.db.run(
+                `INSERT OR IGNORE INTO foreshadowing_registry (project_id,foreshadow_id,description,status,planted_chapter) VALUES (?,?,?,?,?)`,
+                [pid, nextId, planted[fi], 'planted', chapNum]
+              )
+            }
+            const recovered: string[] = Array.isArray(s.foreshadowing_recovered) ? s.foreshadowing_recovered : []
+            for (const recDesc of recovered) {
+              await window.electronAPI!.db.run(
+                `UPDATE foreshadowing_registry SET status='resolved',resolved_chapter=?,updated_at=datetime('now','localtime') WHERE project_id=? AND description LIKE ? AND status!='resolved'`,
+                [chapNum, pid, `%${recDesc.slice(0, 20)}%`]
+              )
+            }
+            // 同步时间线
+            const keyEvents: string[] = Array.isArray(s.key_events) ? s.key_events : []
+            const timeLabels: string[] = Array.isArray(s.time_labels) ? s.time_labels : []
+            for (let ei = 0; ei < keyEvents.length; ei++) {
+              await window.electronAPI!.db.run(
+                `INSERT INTO story_timeline (project_id,chapter_number,event_order,event_description,time_label,location,characters_involved,is_major) VALUES (?,?,?,?,?,?,?,?)`,
+                [pid, chapNum, ei, keyEvents[ei], timeLabels[0] || '', Array.isArray(s.locations) ? s.locations[0] || '' : '', JSON.stringify(Array.isArray(s.characters_appeared) ? s.characters_appeared : []), ei === 0 ? 1 : 0]
               )
             }
           }
@@ -1113,14 +1180,15 @@ export default function Workspace() {
       {/* ===== 右栏：工具面板 ===== */}
       <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
         {/* Tab 切换 */}
-        <div className="flex border-b border-border shrink-0">
-          {(['outline', 'volumes', 'cards', 'review'] as const).map(tab => (
+        <div className="flex border-b border-border shrink-0 flex-wrap">
+          {(['outline', 'volumes', 'cards', 'foreshadowing', 'timeline', 'canon', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
-              className={`flex-1 py-2 text-xs font-medium transition-colors
+              className={`py-2 px-2 text-xs font-medium transition-colors
                 ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
               `}>
-              {{ outline: '📐 大纲', volumes: '📑 细纲', cards: '🃏 卡片', review: '🔍 校对' }[tab]}
+              {{ outline: '📐 大纲', volumes: '📑 细纲', cards: '🃏 卡片',
+                 foreshadowing: '🪝 伏笔', timeline: '⏱ 时间线', canon: '📖 事实簿', review: '🔍 校对' }[tab]}
             </button>
           ))}
         </div>
@@ -1313,6 +1381,21 @@ export default function Workspace() {
           {/* 卡片 Tab */}
           {rightTab === 'cards' && (
             <CardPanel projectId={Number(id)} refreshTrigger={cardRefresh} genLoading={cardGenLoading} onGenLoadingChange={setCardGenLoading} />
+          )}
+
+          {/* 伏笔 Tab */}
+          {rightTab === 'foreshadowing' && (
+            <ForeshadowingPanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} />
+          )}
+
+          {/* 时间线 Tab */}
+          {rightTab === 'timeline' && (
+            <TimelinePanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} />
+          )}
+
+          {/* 事实簿 Tab */}
+          {rightTab === 'canon' && (
+            <CanonFactPanel projectId={Number(id)} outlineContent={outlineContent} />
           )}
 
           {/* 校对 Tab */}

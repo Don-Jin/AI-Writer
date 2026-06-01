@@ -145,6 +145,63 @@ export interface ChapterSummary {
   created_at: string
 }
 
+// ========== 伏笔注册表 ==========
+export type ForeshadowingStatus = 'planned' | 'planted' | 'buried' | 'recycled' | 'resolved' | 'expired'
+export type ForeshadowingPriority = 'critical' | 'high' | 'normal' | 'low'
+
+export interface ForeshadowingItem {
+  id: number
+  project_id: number
+  foreshadow_id: string
+  description: string
+  status: ForeshadowingStatus
+  priority: ForeshadowingPriority
+  planted_chapter: number | null
+  target_chapter: number | null
+  resolved_chapter: number | null
+  related_characters: string[]
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+// ========== 故事时间线 ==========
+export type TimelineEventType = 'plot' | 'character_development' | 'revelation' | 'conflict' | 'resolution' | 'world_building'
+
+export interface TimelineEvent {
+  id: number
+  project_id: number
+  chapter_number: number
+  event_order: number
+  event_description: string
+  time_label: string
+  absolute_day: number | null
+  location: string
+  characters_involved: string[]
+  event_type: TimelineEventType
+  is_major: number
+  created_at: string
+}
+
+// ========== 事实簿 ==========
+export type FactCategory = 'character' | 'setting' | 'timeline' | 'rule' | 'relationship' | 'event'
+
+export interface CanonFact {
+  id: number
+  project_id: number
+  fact_category: FactCategory
+  fact_key: string
+  fact_value: string
+  established_chapter: number | null
+  last_verified: number | null
+  is_hard_rule: number
+  verification_status: number
+  source: string
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
 // ========== 上下文状态 ==========
 export interface CharacterState {
   [name: string]: {

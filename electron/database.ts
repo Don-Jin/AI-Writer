@@ -195,6 +195,12 @@ function createTables(): void {
     );
   `)
 
+  // Tier 1 迁移：v1.4 新表（如果已存在则跳过）
+  try { db.run('CREATE TABLE IF NOT EXISTS foreshadowing_registry (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, foreshadow_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'planted\', priority TEXT NOT NULL DEFAULT \'normal\', planted_chapter INTEGER, target_chapter INTEGER, resolved_chapter INTEGER, related_characters TEXT DEFAULT \'[]\', notes TEXT DEFAULT \'\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE, UNIQUE(project_id, foreshadow_id))') } catch {}
+  try { db.run('CREATE TABLE IF NOT EXISTS story_timeline (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, chapter_number INTEGER NOT NULL, event_order INTEGER NOT NULL DEFAULT 0, event_description TEXT NOT NULL, time_label TEXT DEFAULT \'\', absolute_day INTEGER, location TEXT DEFAULT \'\', characters_involved TEXT DEFAULT \'[]\', event_type TEXT DEFAULT \'plot\', is_major INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
+  try { db.run('CREATE INDEX IF NOT EXISTS idx_timeline_project ON story_timeline(project_id, absolute_day)') } catch {}
+  try { db.run('CREATE TABLE IF NOT EXISTS canon_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, fact_category TEXT NOT NULL DEFAULT \'setting\', fact_key TEXT NOT NULL, fact_value TEXT NOT NULL, established_chapter INTEGER, last_verified INTEGER, is_hard_rule INTEGER NOT NULL DEFAULT 0, verification_status INTEGER NOT NULL DEFAULT 0, source TEXT DEFAULT \'\', notes TEXT DEFAULT \'\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
+
   // 迁移：为旧数据库添加 cached_tokens 列
   try { db.run('ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0') } catch {}
 
