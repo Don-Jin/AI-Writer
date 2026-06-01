@@ -275,3 +275,16 @@ PRAGMA foreign_keys = ON
 ### 8. 提示词中禁止使用智能引号
 
 编辑 JSX 的 `placeholder`、`className` 等属性时，确保使用普通引号 `"..."` 而非智能引号 `"..."`。智能引号会导致 JSX 编译失败。
+
+### 9. JSON 默认值必须防御空对象 `{}`
+
+数据库 TEXT 字段的默认值 `'{}'` 经 `JSON.parse` 后是空对象 `{}`，`||` 运算符认为它是真值。
+
+```typescript
+// ❌ 错误：{} 是 truthy，回退不生效 → data.characters 是 undefined → 崩溃
+const data = obj.field || { characters: [], worlds: [] }
+
+// ✅ 正确：展开默认值覆盖空对象
+const raw = obj.field || {}
+const data = { characters: (raw as any).characters || [], worlds: (raw as any).worlds || [] }
+```

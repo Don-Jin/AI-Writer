@@ -17,7 +17,13 @@ export default function SettingDetail() {
   const runningRef = useRef(false)
 
   const proj = libraries.find(l => l.id === Number(id))
-  const data = proj?.setting_data || { characters: [], worlds: [], rules: [], relationships: [] }
+  const raw = proj?.setting_data || {}
+  const data = {
+    characters: (raw as any).characters || [],
+    worlds: (raw as any).worlds || [],
+    rules: (raw as any).rules || [],
+    relationships: (raw as any).relationships || [],
+  }
 
   useEffect(() => { load() }, [])
   useEffect(() => { runningRef.current = running }, [running])
