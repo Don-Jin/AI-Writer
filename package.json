@@ -4,7 +4,7 @@
   "description": "AI 小说写作软件 — 学习小说风格，辅助长篇小说创作",
   "main": "dist-electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -n renderer,electron \"vite\" \"wait-on http://localhost:5173 && node scripts/build-electron.mjs && cross-env ELECTRON_RUN_AS_NODE= VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "dev": "concurrently -n renderer,electron \"vite\" \"wait-on http://localhost:5173 && node scripts/build-electron.mjs && node scripts/start-electron.cjs\"",
     "build": "vite build && node scripts/build-electron.mjs",
     "package": "npm run build && electron-builder"
   },
