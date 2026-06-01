@@ -209,6 +209,62 @@ function createTables(): void {
   // 迁移：为旧数据库添加 cached_tokens 列
   try { db.run('ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0') } catch {}
 
+  // 迁移：canon_facts 增加 details 字段
+  try { db.run('ALTER TABLE canon_facts ADD COLUMN details TEXT DEFAULT \'{}\'') } catch {}
+
+  // 迁移：将 character_cards 数据迁入 canon_facts
+  try {
+    const chars = db.exec("SELECT * FROM character_cards")
+    if (chars.length > 0) {
+      const cols = chars[0].columns
+      const rows = chars[0].values
+      for (const row of rows) {
+        const obj: any = {}
+        cols.forEach((c: string, i: number) => { obj[c] = row[i] })
+        const details: any = {}
+        if (obj.personality) details.personality = obj.personality
+        if (obj.background) details.background = obj.background
+        if (obj.appearance) details.appearance = obj.appearance
+        if (obj.abilities) details.abilities = obj.abilities
+        if (obj.relationships) details.relationships = obj.relationships
+        if (obj.status_tracking) details.status_tracking = obj.status_tracking
+        if (obj.role_type) details.role_type = obj.role_type
+        db.run(
+          "INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details) VALUES (?, 'character', ?, ?, 1, '卡片迁移', ?)",
+          [obj.project_id, obj.name, obj.notes || obj.personality?.slice(0, 200) || '', JSON.stringify(details)]
+        )
+      }
+    }
+  } catch {}
+
+  // 迁移：将 world_settings 数据迁入 canon_facts
+  try {
+    const worlds = db.exec("SELECT * FROM world_settings")
+    if (worlds.length > 0) {
+      const cols = worlds[0].columns
+      const rows = worlds[0].values
+      for (const row of rows) {
+        const obj: any = {}
+        cols.forEach((c: string, i: number) => { obj[c] = row[i] })
+        const details: any = {}
+        if (obj.description) details.description = obj.description
+        if (obj.details) details.inner_details = obj.details
+        if (obj.trigger_keywords) details.trigger_keywords = obj.trigger_keywords
+        if (obj.priority) details.priority = obj.priority
+        if (obj.is_global) details.is_global = obj.is_global
+        if (obj.notes) details.notes_text = obj.notes
+        db.run(
+          "INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details) VALUES (?, 'setting', ?, ?, 1, '卡片迁移', ?)",
+          [obj.project_id, obj.name, (obj.description || '').slice(0, 200), JSON.stringify(details)]
+        )
+      }
+    }
+  } catch {}
+
+  // 迁移后删除旧表
+  try { db.run('DROP TABLE IF EXISTS character_cards') } catch {}
+  try { db.run('DROP TABLE IF EXISTS world_settings') } catch {}
+
   // 插入默认设置
   db.run(`
     INSERT OR IGNORE INTO settings (key, value) VALUES ('api_key', '');

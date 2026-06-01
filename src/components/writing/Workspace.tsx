@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
-import CardPanel from './CardPanel'
 import ForeshadowingPanel from './ForeshadowingPanel'
 import TimelinePanel from './TimelinePanel'
 import CanonFactPanel from './CanonFactPanel'
@@ -16,10 +15,10 @@ import {
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
   CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
   CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER,
-  buildCharacterContext, buildWorldContext, buildMinimalContext,
+  buildMinimalContext,
   REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
-import type { NovelProject, Chapter, StyleLibrary, CharacterCard, WorldSetting } from '../../types'
+import type { NovelProject, Chapter, StyleLibrary } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
 
 // ===== 类型 =====
@@ -103,7 +102,7 @@ export default function Workspace() {
   const [genTarget, setGenTarget] = useState('')
   const [budgetInfo, setBudgetInfo] = useState<{ charTokens?: number; totalChars?: number } | null>(null)
   const [saving, setSaving] = useState(false)
-  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'cards' | 'review' | 'foreshadowing' | 'timeline' | 'canon'>('outline')
+  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'settings' | 'review' | 'foreshadowing' | 'timeline'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
   const [reviewResult, setReviewResult] = useState<{ overall_report: string; chapter_fixes: ChapterFix[] } | null>(null)
   const [reviewing, setReviewing] = useState(false)
@@ -119,10 +118,7 @@ export default function Workspace() {
   const [styleLibraries, setStyleLibraries] = useState<StyleLibrary[]>([])
   const [disassemblies, setDisassemblies] = useState<DisassemblyProject[]>([])
 
-  const [characters, setCharacters] = useState<CharacterCard[]>([])
-  const [worlds, setWorlds] = useState<WorldSetting[]>([])
-  const [cardRefresh, setCardRefresh] = useState(0)
-  const [cardGenLoading, setCardGenLoading] = useState(false)
+  const [canonRefresh, setCanonRefresh] = useState(0)
 
   // 流式生成
   const [streamingText, setStreamingText] = useState('')
@@ -177,12 +173,6 @@ export default function Workspace() {
       setStyleLibraries(libs.map((l: any) => ({ ...l, style_profile: typeof l.style_profile === 'string' ? JSON.parse(l.style_profile) : l.style_profile })))
       const diss = await window.electronAPI.db.query('SELECT * FROM disassembly_projects ORDER BY updated_at DESC')
       setDisassemblies(diss)
-
-      // 加载角色卡片和世界设定
-      const chars = await window.electronAPI.db.query('SELECT * FROM character_cards WHERE project_id = ? ORDER BY CASE role_type WHEN "main" THEN 1 WHEN "antagonist" THEN 2 WHEN "support" THEN 3 ELSE 4 END', [Number(id)])
-      setCharacters(chars.map((c: any) => ({ ...c, relationships: parseJson(c.relationships, []), status_tracking: parseJson(c.status_tracking, {}) })))
-      const ws = await window.electronAPI.db.query('SELECT * FROM world_settings WHERE project_id = ? ORDER BY priority ASC', [Number(id)])
-      setWorlds(ws)
 
       // 恢复上次章节
       const lastCh = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`workspace_ch_${id}`])
@@ -275,11 +265,24 @@ export default function Workspace() {
 
   // ========== 生成逻辑（层级依赖） ==========
 
-  const getRefs = () => {
+  const getRefs = async () => {
     const { styleContext, disassemblyContext } = buildRefContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
-    const charContext = buildCharacterContext(characters)
-    const worldCtx = buildWorldContext(worlds)
-    const cardContext = [charContext, worldCtx].filter(Boolean).join('\n\n')
+    // 从 canon_facts 读取设定上下文
+    let cardContext = ''
+    try {
+      const facts = await window.electronAPI!.db.query(
+        "SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1",
+        [Number(id)]
+      )
+      if (facts.length > 0) {
+        const chars = facts.filter((f: any) => f.fact_category === 'character')
+        const settings = facts.filter((f: any) => f.fact_category === 'setting')
+        const rules = facts.filter((f: any) => f.fact_category === 'rule')
+        if (chars.length) cardContext += '【角色】\n' + chars.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
+        if (settings.length) cardContext += '【世界设定】\n' + settings.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
+        if (rules.length) cardContext += '【规则】\n' + rules.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
+      }
+    } catch {}
     return { styleContext, disassemblyContext, cardContext }
   }
 
@@ -299,11 +302,9 @@ export default function Workspace() {
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget('大纲')
     try {
-      const refs = config
-        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
-        : getRefs()
-      const { styleContext, disassemblyContext } = refs
-      const cardContext = (refs as any).cardContext || buildCharacterContext(characters) + '\n\n' + buildWorldContext(worlds)
+      const { styleContext, disassemblyContext, cardContext } = config
+        ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
+        : await getRefs()
       let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
       if (cardContext) {
@@ -362,7 +363,7 @@ export default function Workspace() {
     const nextVolNum = volumes.length + 1
     setGenerating(true)
     try {
-      const { styleContext, disassemblyContext, cardContext } = getRefs()
+      const { styleContext, disassemblyContext, cardContext } = await getRefs()
       let enrichedOutline = outlineContent
       if (styleContext) enrichedOutline += '\n\n【风格】\n' + styleContext
       if (disassemblyContext) enrichedOutline += '\n\n【拆文】\n' + disassemblyContext
@@ -511,11 +512,9 @@ export default function Workspace() {
     setStreamingText('')
 
     try {
-      const refs = config
+      const { styleContext, disassemblyContext } = config
         ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
-        : getRefs()
-      const { styleContext, disassemblyContext } = refs
-      const cardContext = (refs as any).cardContext || buildCharacterContext(characters) + '\n\n' + buildWorldContext(worlds)
+        : await getRefs()
 
       // 找所在卷
       const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
@@ -573,7 +572,11 @@ export default function Workspace() {
           [Number(id), Math.max(1, chapNum - 10)]
         )
         // 检查主角是否缺席过多章
-        const mainChars = characters.filter(c => c.role_type === 'main')
+        const mainChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
+          let d: any = {}
+          try { d = JSON.parse(f.details || '{}') } catch {}
+          return { name: f.fact_key, role_type: d.role_type || 'support' }
+        }).filter((c: any) => c.role_type === 'main')
         for (const mc of mainChars) {
           let lastApp = 0
           for (const sr of summaryRows) {
@@ -604,8 +607,23 @@ export default function Workspace() {
       // 注入智能上下文（按热度分级，只注入相关角色+设定）
       try {
         const recentText = chapters.slice(-3).map(c => c.content).join('\n').slice(-3000)
+        // 从 canon_facts 读取角色和设定用于上下文过滤
+        const allFacts = await window.electronAPI!.db.query(
+          'SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ?',
+          [Number(id)]
+        )
+        const allChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
+          let d: any = {}
+          try { d = JSON.parse(f.details || '{}') } catch {}
+          return { name: f.fact_key, role_type: d.role_type || 'support', personality: f.fact_value, status_tracking: d.status_tracking || {}, abilities: d.abilities || '' }
+        })
+        const allWorlds = allFacts.filter((f: any) => f.fact_category === 'setting' || f.fact_category === 'rule').map((f: any) => {
+          let d: any = {}
+          try { d = JSON.parse(f.details || '{}') } catch {}
+          return { name: f.fact_key, description: f.fact_value, is_global: d.is_global ? 1 : 0, trigger_keywords: d.trigger_keywords || '' }
+        })
         const { charContext: mcChar, worldContext: mcWorld, tokenEstimate: mcTokens } = buildMinimalContext(
-          chapNum, plan.characters, characters, worlds, recentText
+          chapNum, plan.characters, allChars, allWorlds, recentText
         )
         let ctxParts: string[] = []
         if (mcChar) ctxParts.push(`【👤 角色上下文】\n${mcChar}`)
@@ -1260,14 +1278,14 @@ export default function Workspace() {
       <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
         {/* Tab 切换 */}
         <div className="flex border-b border-border shrink-0 flex-wrap">
-          {(['outline', 'volumes', 'cards', 'foreshadowing', 'timeline', 'canon', 'review'] as const).map(tab => (
+          {(['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
               className={`py-2 px-2 text-xs font-medium transition-colors
                 ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
               `}>
-              {{ outline: '📐 大纲', volumes: '📑 细纲', cards: '🃏 卡片',
-                 foreshadowing: '🪝 伏笔', timeline: '⏱ 时间线', canon: '📖 事实簿', review: '🔍 校对' }[tab]}
+              {{ outline: '📐 大纲', volumes: '📑 细纲', settings: '📖 设定',
+                 foreshadowing: '🪝 伏笔', timeline: '⏱ 时间线', review: '🔍 校对' }[tab]}
             </button>
           ))}
         </div>
@@ -1457,9 +1475,14 @@ export default function Workspace() {
             </div>
           )}
 
-          {/* 卡片 Tab */}
-          {rightTab === 'cards' && (
-            <CardPanel projectId={Number(id)} refreshTrigger={cardRefresh} genLoading={cardGenLoading} onGenLoadingChange={setCardGenLoading} />
+          {/* 设定 Tab（统一管理角色/世界/规则等） */}
+          {rightTab === 'settings' && (
+            <CanonFactPanel
+              projectId={Number(id)}
+              outlineContent={outlineContent}
+              chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title, content: c.content }))}
+              key={canonRefresh}
+            />
           )}
 
           {/* 伏笔 Tab */}
@@ -1470,11 +1493,6 @@ export default function Workspace() {
           {/* 时间线 Tab */}
           {rightTab === 'timeline' && (
             <TimelinePanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} />
-          )}
-
-          {/* 事实簿 Tab */}
-          {rightTab === 'canon' && (
-            <CanonFactPanel projectId={Number(id)} outlineContent={outlineContent} />
           )}
 
           {/* 校对 Tab */}

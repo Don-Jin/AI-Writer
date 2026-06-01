@@ -198,6 +198,7 @@ export interface CanonFact {
   verification_status: number
   source: string
   notes: string
+  details: string  // JSON: 扩展信息（角色卡的性格/能力/关系，或世界设定的触发词/优先级等）
   created_at: string
   updated_at: string
 }
