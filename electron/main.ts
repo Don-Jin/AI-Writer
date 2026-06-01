@@ -289,7 +289,7 @@ function registerIpcHandlers() {
   ipcMain.handle('file:parse', async (_event, filePath: string) => {
     const ext = filePath.split('.').pop()?.toLowerCase()
 
-    if (ext === 'txt') {
+    if (ext === 'txt' || ext === 'md') {
       const buf = readFileSync(filePath)
       // 检测 BOM
       if (buf[0] === 0xFF && buf[1] === 0xFE) {
@@ -330,13 +330,7 @@ function registerIpcHandlers() {
       return result.value
     }
 
-    if (ext === 'pdf') {
-      const fs = await import('fs')
-      const pdfParse = (await import('pdf-parse')).default
-      const dataBuffer = fs.readFileSync(filePath)
-      const data = await pdfParse(dataBuffer)
-      return data.text
-    }
+    // MD 已在上面 txt/md 分支处理
 
     throw new Error(`不支持的文件格式: .${ext}`)
   })

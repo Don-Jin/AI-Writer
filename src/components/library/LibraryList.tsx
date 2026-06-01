@@ -25,7 +25,7 @@ export default function LibraryList() {
   const handleSelectFile = async () => {
     try {
       const result = await window.electronAPI?.openFile({
-        filters: [{ name: '文档文件', extensions: ['txt', 'docx', 'pdf'] }],
+        filters: [{ name: '文档文件', extensions: ['txt', 'docx', 'md'] }],
       })
       if (result) {
         setFilePath(result.filePath)
@@ -273,7 +273,7 @@ export default function LibraryList() {
                 ) : (
                   <>
                     <p className="text-body text-text-secondary mb-1">点击选择文件</p>
-                    <p className="text-caption text-text-placeholder">支持 TXT、Word、PDF 格式</p>
+                    <p className="text-caption text-text-placeholder">支持 TXT、Word、Markdown 格式</p>
                   </>
                 )}
               </div>

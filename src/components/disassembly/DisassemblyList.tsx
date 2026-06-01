@@ -26,7 +26,7 @@ export default function DisassemblyList() {
   const handleSelectFile = async () => {
     try {
       const result = await window.electronAPI?.openFile({
-        filters: [{ name: '文档文件', extensions: ['txt', 'docx', 'pdf'] }],
+        filters: [{ name: '文档文件', extensions: ['txt', 'docx', 'md'] }],
       })
       if (result) {
         setFilePath(result.filePath)
@@ -178,7 +178,7 @@ export default function DisassemblyList() {
                 <span className="text-3xl mb-2 block">📂</span>
                 {fileName ? <p className="text-body text-text-main">{fileName}</p>
                   : <><p className="text-body text-text-secondary mb-1">点击选择文件</p>
-                    <p className="text-caption text-text-placeholder">支持 TXT、Word、PDF</p></>}
+                    <p className="text-caption text-text-placeholder">支持 TXT、Word、Markdown</p></>}
               </div>
             )}
             {mode === 'paste' && (
