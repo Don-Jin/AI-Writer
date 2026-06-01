@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { showToast } from '../common/Toast'
 import {
   localScan, DESLOP_REWRITE_SYSTEM, DESLOP_REWRITE_USER,
@@ -18,6 +18,26 @@ export default function DeslopPanel({ content, onApply }: DeslopPanelProps) {
   const [rewrittenText, setRewrittenText] = useState('')
   const [showCompare, setShowCompare] = useState(false)
   const [step, setStep] = useState<'idle' | 'scanned' | 'rewritten'>('idle')
+  const cancelledRef = useRef(false)
+  const rewritingRef = useRef(false)
+
+  useEffect(() => {
+    rewritingRef.current = rewriting
+  }, [rewriting])
+
+  useEffect(() => {
+    return () => {
+      if (rewritingRef.current) {
+        cancelledRef.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  }, [])
+
+  const handleCancel = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+  }
 
   const handleScan = async () => {
     if (!content.trim()) { showToast('error', '章节内容为空'); return }
@@ -33,17 +53,20 @@ export default function DeslopPanel({ content, onApply }: DeslopPanelProps) {
   const handleRewrite = async () => {
     if (!report) return
     setRewriting(true)
+    cancelledRef.current = false
     try {
       const messages = [
         { role: 'system' as const, content: DESLOP_REWRITE_SYSTEM },
         { role: 'user' as const, content: DESLOP_REWRITE_USER(content, report.severity) },
       ]
       const reply = await window.electronAPI.aiChat(messages, '去AI味改写')
+      if (cancelledRef.current) return
       setRewrittenText(reply)
       setStep('rewritten')
       showToast('success', '去AI味改写完成！')
     } catch (e: any) {
-      showToast('error', '改写失败：' + (e.message || '未知错误'))
+      if (cancelledRef.current) showToast('info', '已取消改写')
+      else showToast('error', '改写失败：' + (e.message || '未知错误'))
     } finally {
       setRewriting(false)
     }
@@ -158,7 +181,8 @@ export default function DeslopPanel({ content, onApply }: DeslopPanelProps) {
       {rewriting && (
         <div className="flex items-center gap-3 px-4 py-8 justify-center">
           <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          <span className="text-body text-text-secondary">AI 正在改写，使其更自然...</span>
+          <span className="text-body text-text-secondary">AI 正在改写...</span>
+          <button onClick={handleCancel} className="px-3 py-1 text-xs border border-danger text-danger rounded hover:bg-danger/10">取消</button>
         </div>
       )}
 

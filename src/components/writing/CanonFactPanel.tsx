@@ -24,6 +24,20 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   const [extracting, setExtracting] = useState(false)
   const [genLoading, setGenLoading] = useState('')
   const cancelledRef = useRef(false)
+  const loadingRef = useRef(false)
+
+  useEffect(() => {
+    loadingRef.current = !!(genLoading || extracting)
+  }, [genLoading, extracting])
+
+  useEffect(() => {
+    return () => {
+      if (loadingRef.current) {
+        cancelledRef.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  }, [])
 
   const handleCancel = () => {
     cancelledRef.current = true

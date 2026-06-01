@@ -17,6 +17,20 @@ export default function LibraryList() {
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState('')
   const cancelledRef = useRef(false)
+  const importingRef = useRef(false)
+
+  useEffect(() => {
+    importingRef.current = importing
+  }, [importing])
+
+  useEffect(() => {
+    return () => {
+      if (importingRef.current) {
+        cancelledRef.current = true
+        window.electronAPI?.cancelAi()
+      }
+    }
+  }, [])
 
   const { libraries, loaded, load, create, remove } = useLibraryStore()
 
@@ -114,7 +128,7 @@ export default function LibraryList() {
       setModalOpen(false)
       resetForm()
     } catch (e: any) {
-      if (cancelledRef.current) return
+      if (cancelledRef.current) { showToast('info', '已取消导入'); return }
       showToast('error', '导入失败：' + (e.message || '未知错误'))
     } finally {
       setImporting(false)

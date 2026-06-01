@@ -98,7 +98,7 @@ export default function SettingList() {
       )}
 
       <Modal open={modalOpen} title="导入小说 · 创建设定库"
-        onClose={() => { if (!creating) { setModalOpen(false); setName(''); setPastedText(''); setFileName(''); setFilePath('') } }}
+        onClose={() => { setModalOpen(false); setName(''); setPastedText(''); setFileName(''); setFilePath(''); setCreating(false) }}
         width="max-w-lg"
         footer={
           !creating ? (
@@ -108,7 +108,10 @@ export default function SettingList() {
               <button onClick={handleCreate}
                 className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover">创建并开始提取</button>
             </>
-          ) : undefined
+          ) : (
+            <button onClick={() => { setModalOpen(false); setName(''); setPastedText(''); setFileName(''); setFilePath(''); setCreating(false) }}
+              className="px-4 py-2 border border-danger text-danger rounded-btn hover:bg-danger/10">取消创建</button>
+          )
         }
       >
         {creating ? (
