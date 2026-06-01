@@ -203,6 +203,23 @@ export interface CanonFact {
   updated_at: string
 }
 
+// ========== 设定库 ==========
+export interface SettingProfile {
+  characters: { name: string; info: string; abilities: string; role: string }[]
+  worlds: { name: string; description: string; category: string }[]
+  rules: { name: string; description: string }[]
+  relationships: { char_a: string; char_b: string; relation: string; description: string }[]
+}
+
+export interface SettingLibrary {
+  id: number
+  name: string
+  source_text: string
+  setting_data: SettingProfile
+  created_at: string
+  updated_at: string
+}
+
 // ========== 上下文状态 ==========
 export interface CharacterState {
   [name: string]: {

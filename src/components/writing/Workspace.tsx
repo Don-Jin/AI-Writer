@@ -302,14 +302,28 @@ export default function Workspace() {
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget('大纲')
     try {
-      const { styleContext, disassemblyContext, cardContext } = config
+      const { styleContext, disassemblyContext } = config
         ? { ...buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies), cardContext: '' }
         : await getRefs()
-      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext)
+      // 读取设定库作为大纲参考
+      let settingLibContext = ''
+      try {
+        const libs = await window.electronAPI!.db.query(
+          "SELECT id, name, setting_data FROM setting_libraries ORDER BY created_at DESC LIMIT 3"
+        )
+        if (libs.length > 0) {
+          settingLibContext = libs.map((l: any) => {
+            const d = typeof l.setting_data === 'string' ? JSON.parse(l.setting_data || '{}') : (l.setting_data || {})
+            const parts: string[] = [`## 《${l.name}》`]
+            if (d.characters?.length) parts.push(`角色(${d.characters.length}个)：${d.characters.map((c: any) => `${c.name}(${c.info || c.role || ''})`).join('、')}`)
+            if (d.worlds?.length) parts.push(`世界观(${d.worlds.length}个)：${d.worlds.map((w: any) => w.name).join('、')}`)
+            if (d.rules?.length) parts.push(`规则(${d.rules.length}个)：${d.rules.map((r: any) => `${r.name}:${r.description}`).join('；')}`)
+            return parts.join('\n')
+          }).join('\n\n')
+        }
+      } catch {}
+      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext, settingLibContext)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
-      if (cardContext) {
-        userPrompt += `\n\n【📋 角色与世界设定——请严格遵循以下设定】\n${cardContext}\n\n请在生成大纲时尊重以上所有角色和世界设定。`
-      }
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: OUTLINE_SYSTEM },

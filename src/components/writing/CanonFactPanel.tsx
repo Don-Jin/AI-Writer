@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { showToast } from '../common/Toast'
 import { CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER } from '../../services/generator'
 import type { CanonFact, FactCategory } from '../../types'
@@ -9,7 +9,6 @@ const CATS: { key: FactCategory; label: string; icon: string }[] = [
   { key: 'rule', label: '规则', icon: '📏' },
   { key: 'relationship', label: '关系', icon: '🔗' },
   { key: 'event', label: '事件', icon: '📖' },
-  { key: 'timeline', label: '时间线', icon: '⏱' },
 ]
 
 interface Props {
@@ -24,6 +23,12 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   const [cat, setCat] = useState<FactCategory>('character')
   const [extracting, setExtracting] = useState(false)
   const [genLoading, setGenLoading] = useState('')
+  const cancelledRef = useRef(false)
+
+  const handleCancel = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+  }
 
   // 手动添加
   const [showAdd, setShowAdd] = useState(false)
@@ -55,6 +60,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   // ========== AI 从大纲生成角色/设定 ==========
   const handleGenFromOutline = async () => {
     if (!outlineContent || !window.electronAPI) { showToast('error', '请先生成大纲'); return }
+    cancelledRef.current = false
     setGenLoading(cat)
     try {
       const prompt = cat === 'character'
@@ -67,6 +73,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         { role: 'system', content: '你是小说设定提取专家。只输出JSON数组，不要任何其他文字。' },
         { role: 'user', content: prompt },
       ], '设定生成')
+      if (cancelledRef.current) return
       const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const jm = clean.match(/\[[\s\S]*\]/)
       if (!jm) { showToast('error', 'AI返回格式异常'); return }
@@ -88,7 +95,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       showToast('success', `已生成 ${arr.length} 个${CATS.find(c => c.key === cat)?.label}`)
       loadFacts()
     } catch (e: any) {
-      showToast('error', '生成失败：' + (e.message || '未知'))
+      if (cancelledRef.current) showToast('info', '已取消生成')
+      else showToast('error', '生成失败：' + (e.message || '未知'))
     } finally { setGenLoading('') }
   }
 
@@ -111,6 +119,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         { role: 'system', content: '只输出JSON数组，不要任何其他文字。' },
         { role: 'user', content: `${prompt}\n\n章节内容：\n${ch.content.slice(0, 7000)}` },
       ], '章节提取设定')
+      if (cancelledRef.current) return
       const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const jm = clean.match(/\[[\s\S]*\]/)
       if (!jm) { showToast('error', 'AI返回格式异常'); return }
@@ -138,7 +147,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       showToast('success', `新增 ${added} 个，更新 ${arr.length - added} 个`)
       loadFacts()
     } catch (e: any) {
-      showToast('error', '提取失败：' + (e.message || '未知'))
+      if (cancelledRef.current) showToast('info', '已取消提取')
+      else showToast('error', '提取失败：' + (e.message || '未知'))
     } finally { setExtracting(false) }
   }
 
@@ -148,6 +158,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
     if (!name || !name.trim()) return
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
 
+    cancelledRef.current = false
     setGenLoading(cat)
     try {
       const prompt = cat === 'character'
@@ -158,6 +169,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         { role: 'system', content: '只输出JSON对象，不要任何其他文字。' },
         { role: 'user', content: `${prompt}\n\n大纲：\n${outlineContent.slice(0, 4000)}` },
       ], 'AI补全设定')
+      if (cancelledRef.current) return
       const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const jm = clean.match(/\{[\s\S]*\}/)
       if (!jm) { showToast('error', 'AI返回格式异常'); return }
@@ -171,7 +183,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       showToast('success', `已添加「${name.trim()}」`)
       loadFacts()
     } catch (e: any) {
-      showToast('error', '补全失败：' + (e.message || '未知'))
+      if (cancelledRef.current) showToast('info', '已取消补全')
+      else showToast('error', '补全失败：' + (e.message || '未知'))
     } finally { setGenLoading('') }
   }
 
@@ -233,7 +246,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       showToast('success', `已提取 ${arr.length} 条核心事实`)
       loadFacts()
     } catch (e: any) {
-      showToast('error', '提取失败：' + (e.message || '未知'))
+      if (cancelledRef.current) showToast('info', '已取消提取')
+      else showToast('error', '提取失败：' + (e.message || '未知'))
     } finally { setExtracting(false) }
   }
 
@@ -249,6 +263,40 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
           className="px-2 py-0.5 text-xs bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
         >{extracting ? '⏳' : '🔄'} 批量提取</button>
+        <button onClick={async () => {
+          try {
+            const libs = await window.electronAPI!.db.query("SELECT id, name, setting_data FROM setting_libraries ORDER BY created_at DESC")
+            if (libs.length === 0) { showToast('error', '左侧设定库暂无数据，请先创建'); return }
+            const names = libs.map((l: any, i: number) => `${i+1}. ${l.name}`).join('\n')
+            const idx = parseInt(window.prompt(`选择要导入的设定库：\n${names}`, '1') || '0') - 1
+            if (idx < 0 || idx >= libs.length) return
+            const lib = libs[idx]
+            const d = typeof lib.setting_data === 'string' ? JSON.parse(lib.setting_data || '{}') : (lib.setting_data || {})
+            let imported = 0
+            for (const ch of (d.characters || [])) {
+              await window.electronAPI!.db.run(
+                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'character', ?, ?, 1, '设定库导入', ?, 0)`,
+                [projectId, ch.name, ch.info || '', JSON.stringify({ personality: ch.info, abilities: ch.abilities, role_type: ch.role })]
+              ); imported++
+            }
+            for (const w of (d.worlds || [])) {
+              await window.electronAPI!.db.run(
+                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'setting', ?, ?, 1, '设定库导入', ?, 0)`,
+                [projectId, w.name, w.description || '', JSON.stringify({ description: w.description, trigger_keywords: w.category })]
+              ); imported++
+            }
+            for (const r of (d.rules || [])) {
+              await window.electronAPI!.db.run(
+                `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter) VALUES (?, 'rule', ?, ?, 1, '设定库导入', ?, 0)`,
+                [projectId, r.name, r.description, '{}']
+              ); imported++
+            }
+            showToast('success', `已从《${lib.name}》导入 ${imported} 条设定`)
+            loadFacts()
+          } catch (e: any) { showToast('error', '导入失败：' + (e.message || '未知')) }
+        }}
+          className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary"
+        >📥 从设定库导入</button>
       </div>
 
       {/* 类别标签 */}
@@ -281,6 +329,11 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         <button onClick={handleAIFill} disabled={!!genLoading || !outlineContent}
           className="px-2 py-0.5 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
         >{genLoading === cat ? '⏳' : '🪄'} AI补全</button>
+        {(genLoading || extracting) && (
+          <button onClick={handleCancel}
+            className="px-2 py-0.5 text-xs border border-danger text-danger rounded hover:bg-danger/10"
+          >⏹ 取消</button>
+        )}
       </div>
 
       {/* 添加表单 */}

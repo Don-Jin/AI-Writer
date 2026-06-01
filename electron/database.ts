@@ -265,6 +265,9 @@ function createTables(): void {
   try { db.run('DROP TABLE IF EXISTS character_cards') } catch {}
   try { db.run('DROP TABLE IF EXISTS world_settings') } catch {}
 
+  // 设定库
+  try { db.run('CREATE TABLE IF NOT EXISTS setting_libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', setting_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))') } catch {}
+
   // 插入默认设置
   db.run(`
     INSERT OR IGNORE INTO settings (key, value) VALUES ('api_key', '');
