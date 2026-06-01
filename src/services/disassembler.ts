@@ -16,7 +16,8 @@
 export function sanitizeText(text: string): string {
   return text
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 移除控制字符
-    .replace(/\\/g, '')                                   // 删除所有反斜杠（根除 \x \u 等转义序列）
+    .replace(/\\[xX][0-9a-fA-F]{0,2}/g, '')             // 无效 \x/\X 序列
+    .replace(/\\u[0-9a-fA-F]{0,4}/g, '')                // 无效 \u 序列
     .replace(/\0/g, '')                                  // 空字符
 }
 

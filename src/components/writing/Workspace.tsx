@@ -406,8 +406,9 @@ export default function Workspace() {
       if (!jm) { showToast('error', '卷纲格式异常，请重试'); return }
       let vol: any
       try { vol = JSON.parse(jm[0]) } catch {
-        vol = JSON.parse(jm[0].replace(/,\s*}/g, '}').replace(/[\x00-\x1f]/g, ' '))
+        try { vol = JSON.parse(jm[0].replace(/,\s*}/g, '}').replace(/[\x00-\x1f]/g, ' ')) } catch {}
       }
+      if (!vol) { showToast('error', '卷纲格式异常，请重试'); return }
       const newVol: Volume = {
         volume_number: nextVolNum,
         title: vol.title || `第${nextVolNum}卷`,
@@ -566,11 +567,19 @@ export default function Workspace() {
         }
       } catch {}
 
+      // 从 canon_facts 读取设定（供一致性检查和上下文注入共用）
+      let allFacts: any[] = []
+      try {
+        allFacts = await window.electronAPI!.db.query(
+          'SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ?',
+          [Number(id)]
+        )
+      } catch {}
+
       // 生成前一致性检查清单
       let consistencyChecklist = ''
       try {
         const checklist: string[] = []
-        // 近期需回收的伏笔
         const urgentFS = await window.electronAPI.db.query(
           `SELECT foreshadow_id, description, target_chapter FROM foreshadowing_registry
            WHERE project_id = ? AND status IN ('planted','buried') AND target_chapter <= ?`,
@@ -580,26 +589,26 @@ export default function Workspace() {
           checklist.push('【🪝 伏笔预警 — 近期需回收】')
           urgentFS.forEach((f: any) => checklist.push(`- ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter}章)`))
         }
-        // 需关注的重要角色状态
         const summaryRows = await window.electronAPI.db.query(
           `SELECT characters_appeared FROM chapter_summaries WHERE project_id = ? AND chapter_number >= ? ORDER BY chapter_number DESC`,
           [Number(id), Math.max(1, chapNum - 10)]
         )
-        // 检查主角是否缺席过多章
-        const mainChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
-          let d: any = {}
-          try { d = JSON.parse(f.details || '{}') } catch {}
-          return { name: f.fact_key, role_type: d.role_type || 'support' }
-        }).filter((c: any) => c.role_type === 'main')
-        for (const mc of mainChars) {
-          let lastApp = 0
-          for (const sr of summaryRows) {
-            const appeared: string[] = typeof sr.characters_appeared === 'string'
-              ? JSON.parse(sr.characters_appeared || '[]') : (sr.characters_appeared || [])
-            if (appeared.includes(mc.name)) { lastApp = chapNum; break }
-          }
-          if (lastApp > 0 && chapNum - lastApp >= 10) {
-            checklist.push(`⚠ 主角「${mc.name}」已缺席 ${chapNum - lastApp} 章`)
+        if (summaryRows.length > 0) {
+          const mainChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
+            let d: any = {}
+            try { d = JSON.parse(f.details || '{}') } catch {}
+            return { name: f.fact_key, role_type: d.role_type || 'support' }
+          }).filter((c: any) => c.role_type === 'main')
+          for (const mc of mainChars) {
+            let lastApp = 0
+            for (const sr of summaryRows) {
+              const appeared: string[] = typeof sr.characters_appeared === 'string'
+                ? JSON.parse(sr.characters_appeared || '[]') : (sr.characters_appeared || [])
+              if (appeared.includes(mc.name)) { lastApp = chapNum; break }
+            }
+            if (lastApp > 0 && chapNum - lastApp >= 10) {
+              checklist.push(`⚠ 主角「${mc.name}」已缺席 ${chapNum - lastApp} 章`)
+            }
           }
         }
         if (checklist.length > 0) {
@@ -618,14 +627,9 @@ export default function Workspace() {
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
         + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
 
-      // 注入智能上下文（按热度分级，只注入相关角色+设定）
+      // 注入智能上下文（按热度分级）
       try {
         const recentText = chapters.slice(-3).map(c => c.content).join('\n').slice(-3000)
-        // 从 canon_facts 读取角色和设定用于上下文过滤
-        const allFacts = await window.electronAPI!.db.query(
-          'SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ?',
-          [Number(id)]
-        )
         const allChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
           let d: any = {}
           try { d = JSON.parse(f.details || '{}') } catch {}
@@ -781,7 +785,14 @@ export default function Workspace() {
     if (!window.confirm(`确定删除${label}吗？此操作不可恢复。`)) return
     try {
       if (window.electronAPI) {
-        if (ch) await window.electronAPI.db.run('DELETE FROM chapters WHERE id = ?', [ch.id])
+        if (ch) {
+          await window.electronAPI.db.run('DELETE FROM chapters WHERE id = ?', [ch.id])
+          // 清理关联数据
+          await window.electronAPI.db.run('DELETE FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          await window.electronAPI.db.run('DELETE FROM story_timeline WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          await window.electronAPI.db.run('DELETE FROM character_arc_log WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          await window.electronAPI.db.run('DELETE FROM relationship_timeline WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+        }
         const newPlans = chapterPlans.filter(p => p.chapter_number !== chapNum)
         await saveChapterPlans(newPlans)
         await loadAll()

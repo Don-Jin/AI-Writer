@@ -187,3 +187,91 @@ novel-ai-writer/
 - [ ] Windows NSIS 安装包 (需要解决 winCodeSign 问题)
 - [ ] 多个拆文库/风格库的交叉引用分析
 - [ ] 章节预览/阅读模式
+
+---
+
+## 代码规范（必读）
+
+### 1. AI 调用取消支持 — 每条 AI 调用必须满足 3 条
+
+任何调用 `window.electronAPI.aiChat()` 或 `aiChatStream()` 的代码**必须**：
+
+```typescript
+// ① 取消 ref + 卸载清理
+const cancelledRef = useRef(false)
+const loadingRef = useRef(false)        // 跟踪 AI 是否在运行
+useEffect(() => { loadingRef.current = loading }, [loading])  // 同步到 ref
+useEffect(() => { return () => {        // 卸载时取消（点其他窗口 = 取消）
+  if (loadingRef.current) { cancelledRef.current = true; window.electronAPI?.cancelAi() }
+}}, [])
+
+// ② 取消按钮
+const handleCancel = () => { cancelledRef.current = true; window.electronAPI?.cancelAi() }
+// 在 loading UI 中显示: <button onClick={handleCancel}>⏹ 取消</button>
+
+// ③ AI 调用后检查 + catch 区分"已取消"
+cancelledRef.current = false
+const reply = await window.electronAPI.aiChat(messages, '用途')
+if (cancelledRef.current) return
+// ...
+} catch (e: any) {
+  if (cancelledRef.current) showToast('info', '已取消XXX')    // 取消 → info
+  else showToast('error', 'XXX失败：' + e.message)             // 错误 → error
+}
+```
+
+**检查清单**：每个 AI 调用 → 取消按钮 ✅ 卸载清理 ✅ "已取消"提示 ✅
+
+### 2. 变量作用域 — 跨 try 块的变量必须先声明
+
+```typescript
+// ❌ 错误：allFacts 在另一个 try 块中定义
+try { allFacts.filter(...) } catch {}  // ReferenceError!
+try { const allFacts = await query() } catch {}
+
+// ✅ 正确：先声明再使用
+let allFacts: any[] = []
+try { allFacts = await query() } catch {}
+try { allFacts.filter(...) } catch {}  // 即使为空数组也不会崩溃
+```
+
+### 3. JSON.parse 返回值必须判空
+
+```typescript
+let obj: any
+try { obj = JSON.parse(str) } catch {}
+// ❌ 直接使用：obj.title → TypeError if obj is undefined
+// ✅ 先判空：if (!obj) { showToast('error', '格式异常'); return }
+```
+
+### 4. sanitizeText / sanitizeMessages — 只删异常转义，不删合法反斜杠
+
+```typescript
+// ❌ 删除所有反斜杠 → 破坏 \n、JSON转义、代码示例
+.replace(/\\/g, '')
+
+// ✅ 只删除异常的 hex 转义序列（\xNN、\uXXXX 不完整形式）
+.replace(/\\[xX][0-9a-fA-F]{0,2}/g, '')
+.replace(/\\u[0-9a-fA-F]{0,4}/g, '')
+```
+
+### 5. 数据库删除必须级联清理关联表
+
+删除章节时同步清理：`chapter_summaries`、`story_timeline`、`character_arc_log`、`relationship_timeline`
+
+sql.js 默认不启用外键约束，需要在 `createTables()` 开头执行：
+```sql
+PRAGMA foreign_keys = ON
+```
+
+### 6. 类型定义必须一致
+
+`src/types/index.ts` 是唯一的类型定义来源。不要在组件中重复定义同名接口（如 `ChapterPlan`）。如果类型缺少字段，在 types/index.ts 中添加，然后用 `import type` 引用。
+
+### 7. 避免重复的状态系统
+
+不要为同一个功能维护两套状态（如 `genConfig` + `showGenPanel`）。删除旧状态前确认所有引用已迁移。
+
+### 8. 提示词中禁止使用智能引号
+
+编辑 JSX 的 `placeholder`、`className` 等属性时，确保使用普通引号 `"..."` 而非智能引号 `"..."`。智能引号会导致 JSX 编译失败。

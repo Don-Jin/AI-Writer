@@ -37,6 +37,9 @@ export async function initDatabase(): Promise<void> {
 function createTables(): void {
   if (!db) throw new Error('Database not initialized')
 
+  // 启用外键约束（CASCADE DELETE 依赖此设置）
+  db.run('PRAGMA foreign_keys = ON')
+
   db.run(`
     -- 系统设置
     CREATE TABLE IF NOT EXISTS settings (

@@ -7,13 +7,15 @@ let mainWindow: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
 
 // 清理消息内容中的危险字符（安全网，防止 400 错误）
+// 只删除无效的 \xNN 和 \uNNNN hex 转义序列，保留合法反斜杠
 function sanitizeMessages(messages: any[]): any[] {
   return messages.map(m => ({
     ...m,
     content: typeof m.content === 'string'
       ? m.content
           .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // 控制字符
-          .replace(/\\/g, '')                                   // 删除所有反斜杠
+          .replace(/\\[xX][0-9a-fA-F]{0,2}/g, '')             // 无效 \x 序列（0-2位hex）
+          .replace(/\\u[0-9a-fA-F]{0,4}/g, '')                // 无效 \u 序列（0-4位hex）
           .replace(/\0/g, '')                                   // 空字符
       : m.content
   }))
