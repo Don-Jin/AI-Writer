@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import Modal from '../common/Modal'
 import { showToast } from '../common/Toast'
 import InlineEdit from '../common/InlineEdit'
-import { useSettingStore, SettingLibrary } from '../../store/settingStore'
+import { useSettingStore } from '../../store/settingStore'
+import type { SettingLibrary } from '../../types'
 
 export default function SettingList() {
   const [modalOpen, setModalOpen] = useState(false)
@@ -56,7 +57,9 @@ export default function SettingList() {
         showToast('success', `设定库「${name}」创建成功！`)
         setModalOpen(false)
         setName(''); setPastedText(''); setFilePath(''); setFileName(''); setMode('file')
+        return
       }
+      showToast('error', '创建失败，请重试')
     } catch (e: any) {
       showToast('error', '创建失败：' + (e.message || '未知错误'))
     } finally { setCreating(false) }
@@ -119,7 +122,7 @@ export default function SettingList() {
               <label className="block text-body text-text-main mb-2">名称 *</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)}
                 placeholder="例如：盘龙设定、斗破苍穹设定" autoFocus
-                className="w-full h-10 px-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary" />
+                className="w-full h-10 px-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
             </div>
             <div>
               <label className="block text-body text-text-main mb-2">导入方式</label>
@@ -144,7 +147,7 @@ export default function SettingList() {
             {mode === 'paste' && (
               <textarea value={pastedText} onChange={e => setPastedText(e.target.value)}
                 placeholder="将小说全文粘贴到此处" rows={10}
-                className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none focus:outline-none focus:border-primary" />
+                className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
             )}
           </div>
         )}
