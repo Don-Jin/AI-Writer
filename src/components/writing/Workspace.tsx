@@ -16,7 +16,7 @@ import {
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
   CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
   CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER,
-  buildCharacterContext, buildWorldContext,
+  buildCharacterContext, buildWorldContext, buildMinimalContext,
   REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
 import type { NovelProject, Chapter, StyleLibrary, CharacterCard, WorldSetting } from '../../types'
@@ -101,6 +101,7 @@ export default function Workspace() {
   const [editingContent, setEditingContent] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genTarget, setGenTarget] = useState('')
+  const [budgetInfo, setBudgetInfo] = useState<{ charTokens?: number; totalChars?: number } | null>(null)
   const [saving, setSaving] = useState(false)
   const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'cards' | 'review' | 'foreshadowing' | 'timeline' | 'canon'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
@@ -552,6 +553,43 @@ export default function Workspace() {
         }
       } catch {}
 
+      // 生成前一致性检查清单
+      let consistencyChecklist = ''
+      try {
+        const checklist: string[] = []
+        // 近期需回收的伏笔
+        const urgentFS = await window.electronAPI.db.query(
+          `SELECT foreshadow_id, description, target_chapter FROM foreshadowing_registry
+           WHERE project_id = ? AND status IN ('planted','buried') AND target_chapter <= ?`,
+          [Number(id), chapNum + 3]
+        )
+        if (urgentFS.length > 0) {
+          checklist.push('【🪝 伏笔预警 — 近期需回收】')
+          urgentFS.forEach((f: any) => checklist.push(`- ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter}章)`))
+        }
+        // 需关注的重要角色状态
+        const summaryRows = await window.electronAPI.db.query(
+          `SELECT characters_appeared FROM chapter_summaries WHERE project_id = ? AND chapter_number >= ? ORDER BY chapter_number DESC`,
+          [Number(id), Math.max(1, chapNum - 10)]
+        )
+        // 检查主角是否缺席过多章
+        const mainChars = characters.filter(c => c.role_type === 'main')
+        for (const mc of mainChars) {
+          let lastApp = 0
+          for (const sr of summaryRows) {
+            const appeared: string[] = typeof sr.characters_appeared === 'string'
+              ? JSON.parse(sr.characters_appeared || '[]') : (sr.characters_appeared || [])
+            if (appeared.includes(mc.name)) { lastApp = chapNum; break }
+          }
+          if (lastApp > 0 && chapNum - lastApp >= 10) {
+            checklist.push(`⚠ 主角「${mc.name}」已缺席 ${chapNum - lastApp} 章`)
+          }
+        }
+        if (checklist.length > 0) {
+          consistencyChecklist = '⚠️ 生成前一致性检查清单（请逐条确认本章不违反）：\n' + checklist.join('\n')
+        }
+      } catch {}
+
       const planAny = plan as any
       let userPrompt = CHAPTER_USER(
         project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
@@ -561,11 +599,22 @@ export default function Workspace() {
         (disassemblyContext + '\n\n' + volContext + prevSummaryContext),
         canonFactsContext
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
+        + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
 
-      // 注入卡片上下文
-      if (cardContext) {
-        userPrompt += `\n\n【📋 角色与世界设定——请严格遵循】\n${cardContext.slice(0, 2000)}\n\n请在写作时严格遵循以上所有角色设定和世界观设定。`
-      }
+      // 注入智能上下文（按热度分级，只注入相关角色+设定）
+      try {
+        const recentText = chapters.slice(-3).map(c => c.content).join('\n').slice(-3000)
+        const { charContext: mcChar, worldContext: mcWorld, tokenEstimate: mcTokens } = buildMinimalContext(
+          chapNum, plan.characters, characters, worlds, recentText
+        )
+        let ctxParts: string[] = []
+        if (mcChar) ctxParts.push(`【👤 角色上下文】\n${mcChar}`)
+        if (mcWorld) ctxParts.push(`【🌍 世界设定】\n${mcWorld}`)
+        if (ctxParts.length > 0) {
+          userPrompt += `\n\n${ctxParts.join('\n\n')}`
+        }
+        setBudgetInfo({ charTokens: mcTokens, totalChars: userPrompt.length })
+      } catch {}
 
       // 使用流式 API
       let fullText = ''
@@ -656,6 +705,24 @@ export default function Workspace() {
                 `INSERT INTO story_timeline (project_id,chapter_number,event_order,event_description,time_label,location,characters_involved,is_major) VALUES (?,?,?,?,?,?,?,?)`,
                 [pid, chapNum, ei, keyEvents[ei], timeLabels[0] || '', Array.isArray(s.locations) ? s.locations[0] || '' : '', JSON.stringify(Array.isArray(s.characters_appeared) ? s.characters_appeared : []), ei === 0 ? 1 : 0]
               )
+            }
+            // 同步角色成长
+            const charChanges: Record<string, string> = s.character_changes || {}
+            for (const [cname, desc] of Object.entries(charChanges)) {
+              await window.electronAPI!.db.run(
+                `INSERT INTO character_arc_log (project_id,character_name,chapter_number,change_type,change_description,before_state) VALUES (?,?,?,'development',?,'')`,
+                [pid, cname, chapNum, String(desc)]
+              )
+            }
+            // 同步关系演变
+            const relChanges: any[] = Array.isArray(s.relationship_changes) ? s.relationship_changes : []
+            for (const rc of relChanges) {
+              if (rc.char_a && rc.char_b && rc.change) {
+                await window.electronAPI!.db.run(
+                  `INSERT INTO relationship_timeline (project_id,char_a,char_b,chapter_number,relation_type,change_description) VALUES (?,?,?,?,?,?)`,
+                  [pid, rc.char_a, rc.char_b, chapNum, rc.type || 'ally', rc.change]
+                )
+              }
             }
           }
         } catch { /* 摘要失败不阻塞 */ }
@@ -1120,11 +1187,23 @@ export default function Workspace() {
               <textarea
                 value={genHint}
                 onChange={(e) => setGenHint(e.target.value)}
-                placeholder="💡 额外提示（可选）：如“让主角更冷酷”“增加感情戏”“第一章要有悬念反转”..."
+                placeholder="💡 额外提示（可选）..."
                 rows={2}
                 className="w-full px-3 py-1.5 text-xs border border-border-input rounded-btn resize-none focus:outline-none focus:border-primary placeholder:text-text-placeholder"
               />
             </div>
+            {budgetInfo && showGenPanel === 'chapter' && (
+              <div className="flex items-center gap-2 text-xs text-text-secondary">
+                <span>📊 上下文预算:</span>
+                <span>角色 ~{budgetInfo.charTokens || 0} tokens</span>
+                <span>· 总计 ~{Math.ceil((budgetInfo.totalChars || 0) * 0.4)} tokens</span>
+                {(budgetInfo.totalChars || 0) * 0.4 > 5000 ? (
+                  <span className="text-danger">⚠ 偏高</span>
+                ) : (
+                  <span className="text-green-600">✅ 适中</span>
+                )}
+              </div>
+            )}
             {generating ? (
               <div className="flex gap-2">
                 <span className="px-4 py-2 text-xs text-warning flex items-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 生成中...</span>
@@ -1432,13 +1511,14 @@ export default function Workspace() {
                     <p className="text-xs text-success text-center py-4">✅ 未发现明显问题</p>
                   ) : (
                     reviewResult.chapter_fixes.map(fix => {
-                      const sevColors: Record<string, string> = { '严重': 'bg-danger', '中等': 'bg-warning', '轻微': 'bg-text-placeholder' }
+                      const sevColors: Record<string, string> = { 'S1': 'bg-red-600', 'S2': 'bg-orange-500', 'S3': 'bg-yellow-500', 'S4': 'bg-gray-400', '严重': 'bg-danger', '中等': 'bg-warning', '轻微': 'bg-text-placeholder' }
+                      const sevLabels: Record<string, string> = { 'S1': 'S1 硬事实冲突', 'S2': 'S2 软设定冲突', 'S3': 'S3 风格不一致', 'S4': 'S4 质量建议' }
                       const isEditing = editingFixPrompt === fix.chapter_number
                       return (
                         <div key={fix.chapter_number} className="bg-white rounded-card border border-border p-3">
                           <div className="flex items-center gap-2 mb-2">
                             <span className="text-xs font-medium text-text-main">第{fix.chapter_number}章</span>
-                            <span className={`text-[10px] text-white px-1.5 py-0.5 rounded-full ${sevColors[fix.severity] || 'bg-text-placeholder'}`}>{fix.severity}</span>
+                            <span className={`text-[10px] text-white px-1.5 py-0.5 rounded-full ${sevColors[fix.severity] || 'bg-text-placeholder'}`}>{sevLabels[fix.severity] || fix.severity}</span>
                           </div>
                           <ul className="text-xs text-text-secondary mb-2 space-y-0.5">
                             {fix.issues.map((issue, i) => (
