@@ -8,7 +8,7 @@ import type { PersonalityProject } from '../../types'
 
 export default function PersonalityList() {
   const [modalOpen, setModalOpen] = useState(false)
-  const [mode, setMode] = useState<'file' | 'paste'>('file')
+  const [mode, setMode] = useState<'file' | 'paste' | 'manual'>('file')
   const [name, setName] = useState('')
   const [pastedText, setPastedText] = useState('')
   const [filePath, setFilePath] = useState('')
@@ -44,10 +44,12 @@ export default function PersonalityList() {
       let text = ''
       if (mode === 'file') {
         text = await window.electronAPI.parseFile(filePath)
-      } else {
+      } else if (mode === 'paste') {
         text = pastedText
       }
-      if (!text || text.trim().length < 200) {
+      // manual 模式不需要源文本
+
+      if (mode !== 'manual' && (!text || text.trim().length < 200)) {
         showToast('error', '文本太少（不足200字），无法提取人格')
         setCreating(false)
         return
@@ -55,7 +57,7 @@ export default function PersonalityList() {
 
       const newId = await create(name.trim(), text)
       if (newId !== null && newId !== undefined) {
-        showToast('success', `人格项目「${name}」创建成功！请点击卡片进入提取。`)
+        showToast('success', `人格项目「${name}」创建成功！${mode === 'manual' ? '请点击卡片进入手动填写。' : '请点击卡片进入提取。'}`)
         setModalOpen(false)
         setCreating(false)
         setName(''); setPastedText(''); setFilePath(''); setFileName(''); setMode('file')
@@ -142,8 +144,8 @@ export default function PersonalityList() {
                 className="w-full h-10 px-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
             </div>
             <div>
-              <label className="block text-body text-text-main mb-2">导入方式</label>
-              <div className="flex gap-2">
+              <label className="block text-body text-text-main mb-2">创建方式</label>
+              <div className="flex gap-2 flex-wrap">
                 <button onClick={() => setMode('file')}
                   className={`px-4 py-2 rounded-btn text-body transition-colors ${mode === 'file' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}>
                   📁 上传文件
@@ -151,6 +153,10 @@ export default function PersonalityList() {
                 <button onClick={() => setMode('paste')}
                   className={`px-4 py-2 rounded-btn text-body transition-colors ${mode === 'paste' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}>
                   📋 粘贴文本
+                </button>
+                <button onClick={() => setMode('manual')}
+                  className={`px-4 py-2 rounded-btn text-body transition-colors ${mode === 'manual' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}>
+                  ✍️ 手动创建
                 </button>
               </div>
             </div>
@@ -168,6 +174,11 @@ export default function PersonalityList() {
                 placeholder="将访谈/随笔/创作谈全文粘贴到此处"
                 rows={10}
                 className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
+            )}
+            {mode === 'manual' && (
+              <p className="text-sm text-text-secondary py-4 text-center">
+                创建一个空白人格项目，之后在详情页手动填写 5 个维度的写作人格字段。
+              </p>
             )}
           </div>
         )}

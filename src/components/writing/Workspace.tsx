@@ -139,6 +139,106 @@ ${(d as any).raw_analysis?.slice(0, 300) || ''}`
   }).join('\n\n')
 }
 
+/** 卷纲高级字段 — 可折叠展示 */
+function MoreFields({ vol }: { vol: Volume }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div>
+      <button onClick={() => setShow(!show)}
+        className="text-xs text-primary hover:underline">
+        {show ? '▲ 收起详情' : '▼ 展开更多（节奏/伏笔/里程碑/冲突）'}
+      </button>
+      {show && (
+        <div className="mt-2 space-y-2">
+          {vol.word_count_target ? (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">📊 字数目标</p>
+              <p className="text-xs text-text-secondary">{vol.word_count_target.toLocaleString()} 字</p>
+            </div>
+          ) : null}
+          {vol.connection_prev && (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">⬆️ 承上</p>
+              <p className="text-xs text-text-secondary">{vol.connection_prev}</p>
+            </div>
+          )}
+          {vol.connection_next && (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">⬇️ 启下</p>
+              <p className="text-xs text-text-secondary">{vol.connection_next}</p>
+            </div>
+          )}
+          {vol.pacing_design && (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">🎵 节奏设计</p>
+              <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.pacing_design}</p>
+            </div>
+          )}
+          {vol.emotional_cadence && (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情绪节奏</p>
+              <p className="text-xs text-text-secondary">{vol.emotional_cadence}</p>
+            </div>
+          )}
+          {vol.foreshadowing_plant?.length ? (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">🪝 本卷新埋伏笔</p>
+              {vol.foreshadowing_plant.map((fp, i) => (
+                <p key={i} className="text-xs text-text-secondary">• {fp}</p>
+              ))}
+            </div>
+          ) : null}
+          {vol.foreshadowing_payoff?.length ? (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">✅ 本卷回收伏笔</p>
+              {vol.foreshadowing_payoff.map((fp, i) => (
+                <p key={i} className="text-xs text-text-secondary">• {fp}</p>
+              ))}
+            </div>
+          ) : null}
+          {vol.foreshadowing_advance && (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">🔗 伏笔推进</p>
+              <p className="text-xs text-text-secondary">{vol.foreshadowing_advance}</p>
+            </div>
+          )}
+          {vol.foreshadowing && (
+            <div className="text-xs text-text-secondary">
+              <p>🪝 伏笔：{vol.foreshadowing}</p>
+            </div>
+          )}
+          {(vol.foreshadowing_planted?.length || vol.foreshadowing_recovered?.length) ? (
+            <div className="text-xs text-text-secondary">
+              {vol.foreshadowing_planted?.length ? <p>🪝 新埋伏笔：{vol.foreshadowing_planted.join('、')}</p> : null}
+              {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
+            </div>
+          ) : null}
+          {vol.character_milestones?.length ? (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">👤 人物里程碑</p>
+              {vol.character_milestones.map((cm, i) => (
+                <p key={i} className="text-xs text-text-secondary">
+                  {cm.character}: {cm.start_state} → {cm.end_state}（{cm.key_event}）
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {vol.conflict_nodes?.length ? (
+            <div>
+              <p className="text-xs font-medium text-text-secondary mb-0.5">⚔️ 关键冲突节点</p>
+              {vol.conflict_nodes.map((cn, i) => (
+                <p key={i} className="text-xs text-text-secondary">
+                  [{cn.chapter_segment}] {cn.description}（{cn.escalation_type}）
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Workspace() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -1580,6 +1680,7 @@ export default function Workspace() {
                         </button>
                         {isExpanded && (
                           <div className="border-t border-border px-3 py-2 space-y-2">
+                            {/* 核心信息：始终显示 */}
                             {vol.detailed_summary ? (
                               <div>
                                 <p className="text-xs font-medium text-text-secondary mb-0.5">📖 剧情详述</p>
@@ -1588,6 +1689,14 @@ export default function Workspace() {
                             ) : (
                               <p className="text-xs text-text-secondary">{vol.summary || vol.theme}</p>
                             )}
+                            {((vol.key_events?.length || vol.key_events_str) && (
+                              <div>
+                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚡ 关键事件</p>
+                                <p className="text-xs text-text-secondary">
+                                  {(vol.key_events_str || vol.key_events?.map((e: any) => typeof e === 'string' ? e : `${e.event}(${e.chapters})`).join('、'))}
+                                </p>
+                              </div>
+                            ))}
                             {vol.character_arcs && (
                               <div>
                                 <p className="text-xs font-medium text-text-secondary mb-0.5">👤 角色弧线</p>
@@ -1600,98 +1709,10 @@ export default function Workspace() {
                                 <p className="text-xs text-text-secondary">{vol.emotional_curve}</p>
                               </div>
                             )}
-                            {((vol.key_events?.length || vol.key_events_str) && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚡ 关键事件</p>
-                                <p className="text-xs text-text-secondary">
-                                  {(vol.key_events_str || vol.key_events?.map((e: any) => typeof e === 'string' ? e : `${e.event}(${e.chapters})`).join('、'))}
-                                </p>
-                              </div>
-                            ))}
-                            {vol.foreshadowing && (
-                              <div className="text-xs text-text-secondary">
-                                <p>🪝 伏笔：{vol.foreshadowing}</p>
-                              </div>
+                            {/* 展开更多：v1.4.0 高级字段 */}
+                            {((vol.pacing_design || vol.emotional_cadence || vol.word_count_target || vol.connection_prev || vol.connection_next || vol.foreshadowing_plant?.length || vol.foreshadowing_payoff?.length || vol.foreshadowing_advance || vol.character_milestones?.length || vol.conflict_nodes?.length)) && (
+                              <MoreFields vol={vol} />
                             )}
-                            {(vol.foreshadowing_planted?.length || vol.foreshadowing_recovered?.length) ? (
-                              <div className="text-xs text-text-secondary">
-                                {vol.foreshadowing_planted?.length ? <p>🪝 新埋伏笔：{vol.foreshadowing_planted.join('、')}</p> : null}
-                                {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
-                              </div>
-                            ) : null}
-                            {/* v1.4.0 卷纲优化新增显示 */}
-                            {vol.word_count_target ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">📊 字数目标</p>
-                                <p className="text-xs text-text-secondary">{vol.word_count_target.toLocaleString()} 字</p>
-                              </div>
-                            ) : null}
-                            {vol.connection_prev && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">⬆️ 承上</p>
-                                <p className="text-xs text-text-secondary">{vol.connection_prev}</p>
-                              </div>
-                            )}
-                            {vol.connection_next && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">⬇️ 启下</p>
-                                <p className="text-xs text-text-secondary">{vol.connection_next}</p>
-                              </div>
-                            )}
-                            {vol.pacing_design && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎵 节奏设计</p>
-                                <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.pacing_design}</p>
-                              </div>
-                            )}
-                            {vol.emotional_cadence && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情绪节奏</p>
-                                <p className="text-xs text-text-secondary">{vol.emotional_cadence}</p>
-                              </div>
-                            )}
-                            {vol.foreshadowing_plant?.length ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">🪝 本卷新埋伏笔</p>
-                                {vol.foreshadowing_plant.map((fp, i) => (
-                                  <p key={i} className="text-xs text-text-secondary">• {fp}</p>
-                                ))}
-                              </div>
-                            ) : null}
-                            {vol.foreshadowing_payoff?.length ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">✅ 本卷回收伏笔</p>
-                                {vol.foreshadowing_payoff.map((fp, i) => (
-                                  <p key={i} className="text-xs text-text-secondary">• {fp}</p>
-                                ))}
-                              </div>
-                            ) : null}
-                            {vol.foreshadowing_advance && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">🔗 伏笔推进</p>
-                                <p className="text-xs text-text-secondary">{vol.foreshadowing_advance}</p>
-                              </div>
-                            )}
-                            {vol.character_milestones?.length ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">👤 人物里程碑</p>
-                                {vol.character_milestones.map((cm, i) => (
-                                  <p key={i} className="text-xs text-text-secondary">
-                                    {cm.character}: {cm.start_state} → {cm.end_state}（{cm.key_event}）
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
-                            {vol.conflict_nodes?.length ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚔️ 关键冲突节点</p>
-                                {vol.conflict_nodes.map((cn, i) => (
-                                  <p key={i} className="text-xs text-text-secondary">
-                                    [{cn.chapter_segment}] {cn.description}（{cn.escalation_type}）
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
                             <div className="flex gap-1.5 flex-wrap">
                               <button
                                 onClick={async () => {

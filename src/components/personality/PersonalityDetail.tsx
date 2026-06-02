@@ -180,67 +180,61 @@ export default function PersonalityDetail() {
         </div>
       </div>
 
-      {/* 一键提取按钮 */}
-      <div className="mb-6">
-        {running ? (
-          <div className="flex items-center gap-3 px-4 py-3 bg-primary-light/10 border border-primary/30 rounded-card">
-            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            <div>
-              <p className="text-sm font-medium text-primary">AI 正在分析...</p>
-              <p className="text-xs text-text-secondary mt-0.5">正在从访谈/随笔中提取写作人格</p>
+      {/* 提取按钮（仅当有源文本时显示） */}
+      {project.source_text ? (
+        <div className="mb-6">
+          {running ? (
+            <div className="flex items-center gap-3 px-4 py-3 bg-primary-light/10 border border-primary/30 rounded-card">
+              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              <div>
+                <p className="text-sm font-medium text-primary">AI 正在分析...</p>
+                <p className="text-xs text-text-secondary mt-0.5">正在从访谈/随笔中提取写作人格</p>
+              </div>
+              <button onClick={() => { cancelledRef.current = true; window.electronAPI?.cancelAi() }}
+                className="ml-auto px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
+                ⏹ 取消
+              </button>
             </div>
-            <button onClick={() => { cancelledRef.current = true; window.electronAPI?.cancelAi() }}
-              className="ml-auto px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
-              ⏹ 取消
+          ) : (
+            <button onClick={handleExtract}
+              className="w-full px-4 py-3 text-sm bg-primary text-white rounded-card hover:bg-primary-hover transition-colors">
+              {hasData ? '🔄 重新提取' : '🤖 开始提取（一键完成人格分析）'}
             </button>
-          </div>
-        ) : (
-          <button onClick={handleExtract}
-            className="w-full px-4 py-3 text-sm bg-primary text-white rounded-card hover:bg-primary-hover transition-colors">
-            {hasData ? '🔄 重新提取' : '🤖 开始提取（一键完成人格分析）'}
-          </button>
-        )}
-      </div>
-
-      {/* 5 个维度字段 */}
-      {hasData && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">💢 情感强度</h3>
-            <Field label="情感强度" path={['emotional_intensity']} profile={profile} onSave={saveField} />
-          </div>
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">⚔️ 冲突深度</h3>
-            <Field label="冲突深度" path={['conflict_depth']} profile={profile} onSave={saveField} />
-          </div>
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">🔥 人情温度</h3>
-            <Field label="人情温度" path={['human_warmth']} profile={profile} onSave={saveField} />
-          </div>
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">💬 语言人格</h3>
-            <Field label="语言人格" path={['linguistic_personality']} profile={profile} onSave={saveField} />
-          </div>
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">👀 读者关系</h3>
-            <Field label="读者关系" path={['reader_relationship']} profile={profile} onSave={saveField} />
-          </div>
-          {profile.raw_analysis && (
-            <div className="bg-white rounded-card border border-border p-4">
-              <h3 className="text-sm font-medium text-text-main mb-3">📝 综合分析</h3>
-              <Field label="综合分析" path={['raw_analysis']} profile={profile} onSave={saveField} />
-            </div>
           )}
         </div>
+      ) : (
+        <p className="text-xs text-text-placeholder mb-6 text-center">手动模式 — 直接在下方填写各维度</p>
       )}
 
-      {!hasData && !running && (
-        <div className="text-center py-12 text-text-placeholder text-sm">
-          <p className="mb-2">🧠</p>
-          <p>点击上方按钮，一键提取写作人格模板</p>
-          <p className="text-xs mt-1">AI 将从访谈/随笔中提取 5 个维度的写作人格</p>
+      {/* 5 个维度字段 — 始终显示 */}
+      <div className="space-y-4">
+        <div className="bg-white rounded-card border border-border p-4">
+          <h3 className="text-sm font-medium text-text-main mb-3">💢 情感强度</h3>
+          <Field label="情感强度" path={['emotional_intensity']} profile={profile} onSave={saveField} />
         </div>
-      )}
+        <div className="bg-white rounded-card border border-border p-4">
+          <h3 className="text-sm font-medium text-text-main mb-3">⚔️ 冲突深度</h3>
+          <Field label="冲突深度" path={['conflict_depth']} profile={profile} onSave={saveField} />
+        </div>
+        <div className="bg-white rounded-card border border-border p-4">
+          <h3 className="text-sm font-medium text-text-main mb-3">🔥 人情温度</h3>
+          <Field label="人情温度" path={['human_warmth']} profile={profile} onSave={saveField} />
+        </div>
+        <div className="bg-white rounded-card border border-border p-4">
+          <h3 className="text-sm font-medium text-text-main mb-3">💬 语言人格</h3>
+          <Field label="语言人格" path={['linguistic_personality']} profile={profile} onSave={saveField} />
+        </div>
+        <div className="bg-white rounded-card border border-border p-4">
+          <h3 className="text-sm font-medium text-text-main mb-3">👀 读者关系</h3>
+          <Field label="读者关系" path={['reader_relationship']} profile={profile} onSave={saveField} />
+        </div>
+        {profile.raw_analysis && (
+          <div className="bg-white rounded-card border border-border p-4">
+            <h3 className="text-sm font-medium text-text-main mb-3">📝 综合分析</h3>
+            <Field label="综合分析" path={['raw_analysis']} profile={profile} onSave={saveField} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
