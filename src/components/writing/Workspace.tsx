@@ -108,14 +108,8 @@ function buildStyleContext(
   if (!styles.length) return ''
   return styles.map((s) => {
     const p = s.style_profile
-    return `${s.id === primaryStyleId ? '【主风格】' : '【辅风格】'}${s.name}
-叙事：${p?.writing_style?.narrative_perspective || ''}
-句式：${p?.writing_style?.sentence_characteristics || ''}
-段落配比：${p?.writing_style?.paragraph_ratio || ''}
-语言：${p?.language_features?.vocabulary_preference || ''}
-氛围：${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}
-${p?.raw_analysis?.slice(0, 300) || ''}`
-  }).join('\n\n')
+    return `${s.id === primaryStyleId ? '【主】' : '【辅】'}${s.name}：${p?.writing_style?.narrative_perspective || ''}，${p?.writing_style?.sentence_characteristics || ''}，${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}`
+  }).join('\n')
 }
 
 /** 构建人格库上下文（正文用） */
@@ -128,15 +122,8 @@ function buildPersonalityContext(
   if (!projects.length) return ''
   return projects.map(p => {
     const d = p.personality_data || {}
-    const prefix = p.id === primaryId ? '【主人格】' : '【辅人格】'
-    return `${prefix}《${p.name}》
-情感强度：${(d as any).emotional_intensity || ''}
-冲突深度：${(d as any).conflict_depth || ''}
-人情温度：${(d as any).human_warmth || ''}
-语言人格：${(d as any).linguistic_personality || ''}
-读者关系：${(d as any).reader_relationship || ''}
-${(d as any).raw_analysis?.slice(0, 300) || ''}`
-  }).join('\n\n')
+    return `${p.id === primaryId ? '【主】' : '【辅】'}${p.name}：情感${(d as any).emotional_intensity?.slice(0, 60) || ''}；冲突${(d as any).conflict_depth?.slice(0, 60) || ''}；人情${(d as any).human_warmth?.slice(0, 60) || ''}；语言${(d as any).linguistic_personality?.slice(0, 60) || ''}；读者${(d as any).reader_relationship?.slice(0, 60) || ''}`
+  }).join('\n')
 }
 
 /** 卷纲高级字段 — 可折叠展示 */
@@ -765,13 +752,6 @@ export default function Workspace() {
       const prevCh = chapters.find(c => c.chapter_number === chapNum - 1)
       const prevExcerpt = prevCh?.content?.slice(-300) || ''
 
-      // 人物状态
-      let charState = '{}'
-      try {
-        const ctx = await window.electronAPI.db.get('SELECT character_state FROM context_state WHERE project_id = ?', [Number(id)])
-        if (ctx) charState = ctx.character_state
-      } catch {}
-
       // 前一章摘要（记录官）
       let prevSummaryContext = ''
       try {
@@ -844,10 +824,10 @@ export default function Workspace() {
 
       const planAny = plan as any
       let userPrompt = CHAPTER_USER(
-        project.title, outlineContent.slice(0, 1000), chapNum, plan.title,
+        project.title, prepareContent.slice(0, 500), chapNum, plan.title,
         plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
         planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
-        styleContext, plotSummary, charState, prevExcerpt,
+        styleContext, plotSummary, prevExcerpt,
         (volContext + '\n\n' + prevSummaryContext),
         canonFactsContext, personalityContext
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
