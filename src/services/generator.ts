@@ -433,7 +433,7 @@ export const CHAPTER_USER = (
   emotionalGoal: string, functionTag: string, endingType: string,
   styleDesc: string, plotSummary: string, characterState: string,
   prevExcerpt: string, disassemblyContext: string,
-  canonFactsContext?: string
+  canonFactsContext?: string, personalityContext?: string
 ) => {
   let prompt = `【小说】《${title}》
 
@@ -462,12 +462,16 @@ ${characterState || '请参考细纲中的人物信息'}
   }
 
   if (disassemblyContext) {
-    prompt += `【📚 拆文库学习】\n${disassemblyContext.slice(0, 1500)}\n⚠️ 借鉴参考书的：对话/动作描写/情绪展示/爽点释放\n`
+    prompt += `【📚 上下文参考】\n${disassemblyContext.slice(0, 1500)}\n`
   }
 
   prompt += styleDesc
     ? `【🎨 风格库——整部小说统一应用】\n${styleDesc}\n⚠️ 本章严格遵循以上风格：叙事视角、句式特点、语言偏好、氛围基调。\n`
     : `【默认风格】流畅自然的中文写作，全书保持一致。\n`
+
+  if (personalityContext) {
+    prompt += `\n【🧠 人格库——作者的写作人格，请融入本章写作】\n${personalityContext}\n⚠️ 请将以上人格特质融入本章：情感强度把控、冲突深度的构建、人情温度的表现、语言人格的体现、与读者的关系。\n`
+  }
 
   if (canonFactsContext) {
     prompt += `\n【📖 事实簿——以下事实不可违反，请逐条确认】\n${canonFactsContext}\n`

@@ -7,9 +7,10 @@ interface SidebarProps {
 
 const navItems = [
   { path: '/', label: '首页', icon: '🏠' },
-  { path: '/library', label: '风格库', icon: '🎨' },
   { path: '/disassembly', label: '拆文库', icon: '🔬' },
   { path: '/setting-lib', label: '设定库', icon: '📋' },
+  { path: '/library', label: '风格库', icon: '🎨' },
+  { path: '/personality', label: '人格库', icon: '🧠' },
   { path: '/settings', label: '设置', icon: '⚙' },
 ]
 

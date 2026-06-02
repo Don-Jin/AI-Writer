@@ -220,6 +220,25 @@ export interface SettingLibrary {
   updated_at: string
 }
 
+// ========== 人格库 ==========
+export interface PersonalityProfile {
+  emotional_intensity: string    // 情感强度
+  conflict_depth: string         // 冲突深度
+  human_warmth: string           // 人情温度
+  linguistic_personality: string // 语言人格
+  reader_relationship: string    // 读者关系
+  raw_analysis: string           // 综合分析
+}
+
+export interface PersonalityProject {
+  id: number
+  name: string
+  source_text: string
+  personality_data: PersonalityProfile
+  created_at: string
+  updated_at: string
+}
+
 // ========== 上下文状态 ==========
 export interface CharacterState {
   [name: string]: {

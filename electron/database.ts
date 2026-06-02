@@ -280,6 +280,13 @@ function createTables(): void {
     console.error('Error creating setting_libraries:', e)
   }
 
+  // 人格库
+  try {
+    db.run('CREATE TABLE IF NOT EXISTS personality_projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', personality_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
+  } catch (e) {
+    console.error('Error creating personality_projects:', e)
+  }
+
   // 插入默认设置
   db.run(`
     INSERT OR IGNORE INTO settings (key, value) VALUES ('api_key', '');

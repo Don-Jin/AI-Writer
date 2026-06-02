@@ -18,7 +18,7 @@ import {
   buildMinimalContext,
   REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
-import type { NovelProject, Chapter, StyleLibrary } from '../../types'
+import type { NovelProject, Chapter, StyleLibrary, SettingLibrary, PersonalityProject } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
 
 // ===== 类型 =====
@@ -62,34 +62,81 @@ interface ChapterFix {
 // ===== 构建引用上下文 =====
 function parseJson(v: string, fallback: any) { try { return JSON.parse(v) } catch { return fallback } }
 
-function buildRefContext(
-  primaryStyleId: number | null, auxiliaryStyleIds: number[],
-  disassemblyIds: number[], styleLibraries: StyleLibrary[],
+/** 构建拆文库上下文（大纲/卷纲用） */
+function buildDisassemblyContext(
+  primaryDissId: number | null, auxDissIds: number[],
   disassemblies: DisassemblyProject[]
 ) {
-  let styleContext = '', disassemblyContext = ''
-  const ids = [primaryStyleId, ...auxiliaryStyleIds].filter(Boolean) as number[]
+  const ids = [primaryDissId, ...auxDissIds].filter(Boolean) as number[]
+  const diss = disassemblies.filter(d => ids.includes(d.id))
+  if (!diss.length) return ''
+  return diss.map(d => {
+    const r = JSON.parse(d.stage_results || '{}')
+    return `【${d.id === primaryDissId ? '主参考' : '辅参考'}】${d.name}\n${(r.result || r.stage0 || '').slice(0, 1000)}`
+  }).join('\n\n---\n\n')
+}
+
+/** 构建设定库上下文（大纲/卷纲用） */
+function buildSettingContext(
+  primaryId: number | null, auxIds: number[],
+  settingLibraries: SettingLibrary[]
+) {
+  const ids = [primaryId, ...auxIds].filter(Boolean) as number[]
+  const libs = settingLibraries.filter(l => ids.includes(l.id))
+  if (!libs.length) return ''
+  return libs.map(l => {
+    const d = l.setting_data || {}
+    const chars = (d as any).characters || []
+    const worlds = (d as any).worlds || []
+    const rules = (d as any).rules || []
+    const prefix = l.id === primaryId ? '【主设定】' : '【辅设定】'
+    let ctx = `${prefix}《${l.name}》`
+    if (chars.length) ctx += `\n角色(${chars.length}个)：${chars.map((c: any) => `${c.name}(${c.info || c.role || ''})`).join('、')}`
+    if (worlds.length) ctx += `\n世界观(${worlds.length}个)：${worlds.map((w: any) => w.name).join('、')}`
+    if (rules.length) ctx += `\n规则(${rules.length}个)：${rules.map((r: any) => `${r.name}:${r.description}`).join('；')}`
+    return ctx
+  }).join('\n\n')
+}
+
+/** 构建风格库上下文（正文用） */
+function buildStyleContext(
+  primaryStyleId: number | null, auxStyleIds: number[],
+  styleLibraries: StyleLibrary[]
+) {
+  const ids = [primaryStyleId, ...auxStyleIds].filter(Boolean) as number[]
   const styles = styleLibraries.filter(l => ids.includes(l.id))
-  if (styles.length) {
-    styleContext = styles.map((s, i) => {
-      const p = s.style_profile
-      return `${s.id === primaryStyleId ? '【主风格】' : '【辅风格】'}${s.name}
+  if (!styles.length) return ''
+  return styles.map((s) => {
+    const p = s.style_profile
+    return `${s.id === primaryStyleId ? '【主风格】' : '【辅风格】'}${s.name}
 叙事：${p?.writing_style?.narrative_perspective || ''}
 句式：${p?.writing_style?.sentence_characteristics || ''}
 段落配比：${p?.writing_style?.paragraph_ratio || ''}
 语言：${p?.language_features?.vocabulary_preference || ''}
 氛围：${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}
 ${p?.raw_analysis?.slice(0, 300) || ''}`
-    }).join('\n\n')
-  }
-  const diss = disassemblies.filter(d => disassemblyIds.includes(d.id))
-  if (diss.length) {
-    disassemblyContext = diss.map(d => {
-      const r = JSON.parse(d.stage_results || '{}')
-      return `【参考书】${d.name}\n${[r.stage0, r.stage1, r.stage4].filter(Boolean).join('\n').slice(0, 1000)}`
-    }).join('\n\n---\n\n')
-  }
-  return { styleContext, disassemblyContext }
+  }).join('\n\n')
+}
+
+/** 构建人格库上下文（正文用） */
+function buildPersonalityContext(
+  primaryId: number | null, auxIds: number[],
+  personalityProjects: PersonalityProject[]
+) {
+  const ids = [primaryId, ...auxIds].filter(Boolean) as number[]
+  const projects = personalityProjects.filter(p => ids.includes(p.id))
+  if (!projects.length) return ''
+  return projects.map(p => {
+    const d = p.personality_data || {}
+    const prefix = p.id === primaryId ? '【主人格】' : '【辅人格】'
+    return `${prefix}《${p.name}》
+情感强度：${(d as any).emotional_intensity || ''}
+冲突深度：${(d as any).conflict_depth || ''}
+人情温度：${(d as any).human_warmth || ''}
+语言人格：${(d as any).linguistic_personality || ''}
+读者关系：${(d as any).reader_relationship || ''}
+${(d as any).raw_analysis?.slice(0, 300) || ''}`
+  }).join('\n\n')
 }
 
 export default function Workspace() {
@@ -122,12 +169,21 @@ export default function Workspace() {
   const [editingFixPrompt, setEditingFixPrompt] = useState<number | null>(null)
   const [editFixPromptText, setEditFixPromptText] = useState('')
 
-  // 引用
+  // 引用 — 大纲/卷纲用：拆文库 + 设定库
+  const [primaryDissId, setPrimaryDissId] = useState<number | null>(null)
+  const [auxDissIds, setAuxDissIds] = useState<number[]>([])
+  const [primarySettingLibId, setPrimarySettingLibId] = useState<number | null>(null)
+  const [auxSettingLibIds, setAuxSettingLibIds] = useState<number[]>([])
+  // 引用 — 正文用：风格库 + 人格库
   const [primaryStyleId, setPrimaryStyleId] = useState<number | null>(null)
-  const [auxiliaryStyleIds, setAuxiliaryStyleIds] = useState<number[]>([])
-  const [disassemblyIds, setDisassemblyIds] = useState<number[]>([])
+  const [auxStyleIds, setAuxStyleIds] = useState<number[]>([])
+  const [primaryPersonalityId, setPrimaryPersonalityId] = useState<number | null>(null)
+  const [auxPersonalityIds, setAuxPersonalityIds] = useState<number[]>([])
+  // 库数据
   const [styleLibraries, setStyleLibraries] = useState<StyleLibrary[]>([])
   const [disassemblies, setDisassemblies] = useState<DisassemblyProject[]>([])
+  const [settingLibraries, setSettingLibraries] = useState<SettingLibrary[]>([])
+  const [personalityProjects, setPersonalityProjects] = useState<PersonalityProject[]>([])
 
   const [canonRefresh, setCanonRefresh] = useState(0)
 
@@ -179,11 +235,15 @@ export default function Workspace() {
       if (ctx) setPlotSummary(ctx.plot_summary || '')
 
       if (proj.primary_style_id) setPrimaryStyleId(proj.primary_style_id)
-      try { setAuxiliaryStyleIds(JSON.parse(proj.auxiliary_style_ids || '[]')) } catch {}
+      try { setAuxStyleIds(JSON.parse(proj.auxiliary_style_ids || '[]')) } catch {}
       const libs = await window.electronAPI.db.query('SELECT * FROM style_libraries ORDER BY created_at DESC')
       setStyleLibraries(libs.map((l: any) => ({ ...l, style_profile: typeof l.style_profile === 'string' ? JSON.parse(l.style_profile) : l.style_profile })))
       const diss = await window.electronAPI.db.query('SELECT * FROM disassembly_projects ORDER BY updated_at DESC')
       setDisassemblies(diss)
+      const setLibs = await window.electronAPI.db.query('SELECT * FROM setting_libraries ORDER BY created_at DESC')
+      setSettingLibraries(setLibs.map((l: any) => ({ ...l, setting_data: typeof l.setting_data === 'string' ? JSON.parse(l.setting_data || '{}') : (l.setting_data || {}) })))
+      const pers = await window.electronAPI.db.query('SELECT * FROM personality_projects ORDER BY updated_at DESC')
+      setPersonalityProjects(pers.map((p: any) => ({ ...p, personality_data: typeof p.personality_data === 'string' ? JSON.parse(p.personality_data || '{}') : (p.personality_data || {}) })))
 
       // 恢复上次章节
       const lastCh = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`workspace_ch_${id}`])
@@ -277,8 +337,13 @@ export default function Workspace() {
   // ========== 生成逻辑（层级依赖） ==========
 
   const getRefs = async () => {
-    const { styleContext, disassemblyContext } = buildRefContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
-    // 从 canon_facts 读取设定上下文
+    // 大纲/卷纲用：拆文库 + 设定库
+    const disassemblyContext = buildDisassemblyContext(primaryDissId, auxDissIds, disassemblies)
+    const settingLibContext = buildSettingContext(primarySettingLibId, auxSettingLibIds, settingLibraries)
+    // 正文用：风格库 + 人格库
+    const styleContext = buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)
+    const personalityContext = buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
+    // 从 canon_facts 读取硬规则
     let cardContext = ''
     try {
       const facts = await window.electronAPI!.db.query(
@@ -294,7 +359,7 @@ export default function Workspace() {
         if (rules.length) cardContext += '【规则】\n' + rules.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
       }
     } catch {}
-    return { styleContext, disassemblyContext, cardContext }
+    return { disassemblyContext, settingLibContext, styleContext, personalityContext, cardContext }
   }
 
   /** 弹出生成配置后生成 */
@@ -313,27 +378,11 @@ export default function Workspace() {
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget('大纲')
     try {
-      const { styleContext, disassemblyContext } = config
-        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
+      const { disassemblyContext, settingLibContext } = config
+        ? { disassemblyContext: buildDisassemblyContext(config.primaryDissId, config.auxDissIds, disassemblies),
+            settingLibContext: buildSettingContext(config.primarySettingLibId, config.auxSettingLibIds, settingLibraries) }
         : await getRefs()
-      // 读取设定库作为大纲参考
-      let settingLibContext = ''
-      try {
-        const libs = await window.electronAPI!.db.query(
-          "SELECT id, name, setting_data FROM setting_libraries ORDER BY created_at DESC LIMIT 3"
-        )
-        if (libs.length > 0) {
-          settingLibContext = libs.map((l: any) => {
-            const d = typeof l.setting_data === 'string' ? JSON.parse(l.setting_data || '{}') : (l.setting_data || {})
-            const parts: string[] = [`## 《${l.name}》`]
-            if (d.characters?.length) parts.push(`角色(${d.characters.length}个)：${d.characters.map((c: any) => `${c.name}(${c.info || c.role || ''})`).join('、')}`)
-            if (d.worlds?.length) parts.push(`世界观(${d.worlds.length}个)：${d.worlds.map((w: any) => w.name).join('、')}`)
-            if (d.rules?.length) parts.push(`规则(${d.rules.length}个)：${d.rules.map((r: any) => `${r.name}:${r.description}`).join('；')}`)
-            return parts.join('\n')
-          }).join('\n\n')
-        }
-      } catch {}
-      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, styleContext, disassemblyContext, settingLibContext)
+      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, '', disassemblyContext, settingLibContext || undefined)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
@@ -374,10 +423,9 @@ export default function Workspace() {
 
   // 确认生成（使用当前选择的引用）
   const confirmGen = () => {
-    const config = { primaryStyleId, auxIds: auxiliaryStyleIds, dissIds: disassemblyIds }
-    if (showGenPanel === 'outline') genOutline(config, genHint)
+    if (showGenPanel === 'outline') genOutline({ primaryDissId, auxDissIds, primarySettingLibId, auxSettingLibIds }, genHint)
     else if (showGenPanel === 'volumes') genSingleVolume()
-    else if (showGenPanel === 'chapter') genChapter(selectedChapter, config, genHint)
+    else if (showGenPanel === 'chapter') genChapter(selectedChapter, { primaryStyleId, auxStyleIds, primaryPersonalityId, auxPersonalityIds }, genHint)
   }
 
   /** 生成单卷卷纲 — 读：大纲+前卷+风格+拆文 */
@@ -388,11 +436,11 @@ export default function Workspace() {
     const nextVolNum = volumes.length + 1
     setGenerating(true)
     try {
-      const { styleContext, disassemblyContext, cardContext } = await getRefs()
+      const { disassemblyContext, settingLibContext, cardContext } = await getRefs()
       let enrichedOutline = outlineContent
-      if (styleContext) enrichedOutline += '\n\n【风格】\n' + styleContext
-      if (disassemblyContext) enrichedOutline += '\n\n【拆文】\n' + disassemblyContext
-      if (cardContext) enrichedOutline += '\n\n【角色与世界设定】\n' + cardContext.slice(0, 1500)
+      if (disassemblyContext) enrichedOutline += '\n\n【📚 拆文库学习】\n' + disassemblyContext
+      if (settingLibContext) enrichedOutline += '\n\n【📋 设定库参考】\n' + settingLibContext
+      if (cardContext) enrichedOutline += '\n\n【📖 角色与世界设定】\n' + cardContext.slice(0, 1500)
 
       // 前一卷的上下文
       let prevVolContext = '', prevChapterPlansStr = ''
@@ -604,9 +652,10 @@ export default function Workspace() {
     setStreamingText('')
 
     try {
-      const { styleContext, disassemblyContext } = config
-        ? buildRefContext(config.primaryStyleId, config.auxIds, config.dissIds, styleLibraries, disassemblies)
-        : await getRefs()
+      const { styleContext, personalityContext } = config
+        ? { styleContext: buildStyleContext(config.primaryStyleId, config.auxStyleIds, styleLibraries),
+            personalityContext: buildPersonalityContext(config.primaryPersonalityId, config.auxPersonalityIds, personalityProjects) }
+        : (await getRefs())
 
       // 找所在卷
       const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
@@ -699,8 +748,8 @@ export default function Workspace() {
         plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
         planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
         styleContext, plotSummary, charState, prevExcerpt,
-        (disassemblyContext + '\n\n' + volContext + prevSummaryContext),
-        canonFactsContext
+        (volContext + '\n\n' + prevSummaryContext),
+        canonFactsContext, personalityContext
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
         + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
 
@@ -1268,40 +1317,101 @@ export default function Workspace() {
               <button onClick={() => setShowGenPanel(null)} className="text-text-placeholder hover:text-text-main">✕</button>
             </div>
             <div className="flex gap-4">
-              <div className="flex-1">
-                <h4 className="text-xs font-medium text-text-main mb-1">🎨 风格库</h4>
-                {styleLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
-                  styleLibraries.map(lib => {
-                    const isPrimary = primaryStyleId === lib.id
-                    return (
-                    <div key={lib.id} className="flex items-center gap-1.5 text-xs py-0.5">
-                      <input type="checkbox" checked={isPrimary}
-                        onChange={() => {
-                          if (!isPrimary) setAuxiliaryStyleIds(prev => prev.filter(x => x !== lib.id))
-                          setPrimaryStyleId(isPrimary ? null : lib.id)
-                        }} className="accent-primary" />
-                      <span className="flex-1">{lib.name}</span>
-                      <input type="checkbox" checked={auxiliaryStyleIds.includes(lib.id)}
-                        onChange={() => {
-                          if (isPrimary) setPrimaryStyleId(null)
-                          setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])
-                        }}
-                        className="accent-primary" />
-                      <span className="text-text-placeholder">辅</span>
-                    </div>
-                  )})}
-              </div>
-              <div className="flex-1">
-                <h4 className="text-xs font-medium text-text-main mb-1">📚 拆文库</h4>
-                {disassemblies.filter(d => d.current_stage >= 1).length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
-                  disassemblies.filter(d => d.current_stage >= 1).map(d => (
-                    <label key={d.id} className="flex items-center gap-1.5 text-xs cursor-pointer py-0.5">
-                      <input type="checkbox" checked={disassemblyIds.includes(d.id)}
-                        onChange={() => setDisassemblyIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
-                      <span>{d.name}</span>
-                    </label>
-                  ))}
-              </div>
+              {showGenPanel === 'outline' || showGenPanel === 'volumes' ? (
+                <>
+                  <div className="flex-1">
+                    <h4 className="text-xs font-medium text-text-main mb-1">📚 拆文库</h4>
+                    {disassemblies.filter(d => d.current_stage >= 1).length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                      disassemblies.filter(d => d.current_stage >= 1).map(d => {
+                        const isPrimary = primaryDissId === d.id
+                        return (
+                        <div key={d.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                          <input type="checkbox" checked={isPrimary}
+                            onChange={() => {
+                              if (!isPrimary) setAuxDissIds(prev => prev.filter(x => x !== d.id))
+                              setPrimaryDissId(isPrimary ? null : d.id)
+                            }} className="accent-primary" />
+                          <span className="flex-1">{d.name}</span>
+                          <input type="checkbox" checked={auxDissIds.includes(d.id)}
+                            onChange={() => {
+                              if (isPrimary) setPrimaryDissId(null)
+                              setAuxDissIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])
+                            }} className="accent-primary" />
+                          <span className="text-text-placeholder">辅</span>
+                        </div>
+                      )})}
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-xs font-medium text-text-main mb-1">📋 设定库</h4>
+                    {settingLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                      settingLibraries.map(lib => {
+                        const isPrimary = primarySettingLibId === lib.id
+                        return (
+                        <div key={lib.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                          <input type="checkbox" checked={isPrimary}
+                            onChange={() => {
+                              if (!isPrimary) setAuxSettingLibIds(prev => prev.filter(x => x !== lib.id))
+                              setPrimarySettingLibId(isPrimary ? null : lib.id)
+                            }} className="accent-primary" />
+                          <span className="flex-1">{lib.name}</span>
+                          <input type="checkbox" checked={auxSettingLibIds.includes(lib.id)}
+                            onChange={() => {
+                              if (isPrimary) setPrimarySettingLibId(null)
+                              setAuxSettingLibIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])
+                            }} className="accent-primary" />
+                          <span className="text-text-placeholder">辅</span>
+                        </div>
+                      )})}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex-1">
+                    <h4 className="text-xs font-medium text-text-main mb-1">🎨 风格库</h4>
+                    {styleLibraries.length === 0 ? <p className="text-xs text-text-placeholder">暂无</p> :
+                      styleLibraries.map(lib => {
+                        const isPrimary = primaryStyleId === lib.id
+                        return (
+                        <div key={lib.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                          <input type="checkbox" checked={isPrimary}
+                            onChange={() => {
+                              if (!isPrimary) setAuxStyleIds(prev => prev.filter(x => x !== lib.id))
+                              setPrimaryStyleId(isPrimary ? null : lib.id)
+                            }} className="accent-primary" />
+                          <span className="flex-1">{lib.name}</span>
+                          <input type="checkbox" checked={auxStyleIds.includes(lib.id)}
+                            onChange={() => {
+                              if (isPrimary) setPrimaryStyleId(null)
+                              setAuxStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])
+                            }} className="accent-primary" />
+                          <span className="text-text-placeholder">辅</span>
+                        </div>
+                      )})}
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-xs font-medium text-text-main mb-1">🧠 人格库</h4>
+                    {personalityProjects.filter(p => !!(p.personality_data as any)?.emotional_intensity).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
+                      personalityProjects.filter(p => !!(p.personality_data as any)?.emotional_intensity).map(p => {
+                        const isPrimary = primaryPersonalityId === p.id
+                        return (
+                        <div key={p.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                          <input type="checkbox" checked={isPrimary}
+                            onChange={() => {
+                              if (!isPrimary) setAuxPersonalityIds(prev => prev.filter(x => x !== p.id))
+                              setPrimaryPersonalityId(isPrimary ? null : p.id)
+                            }} className="accent-primary" />
+                          <span className="flex-1">{p.name}</span>
+                          <input type="checkbox" checked={auxPersonalityIds.includes(p.id)}
+                            onChange={() => {
+                              if (isPrimary) setPrimaryPersonalityId(null)
+                              setAuxPersonalityIds(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])
+                            }} className="accent-primary" />
+                          <span className="text-text-placeholder">辅</span>
+                        </div>
+                      )})}
+                  </div>
+                </>
+              )}
             </div>
             <div>
               <textarea
@@ -1854,8 +1964,8 @@ export default function Workspace() {
                       <input type="radio" name="cfgPrimary" checked={primaryStyleId === lib.id}
                         onChange={() => setPrimaryStyleId(primaryStyleId === lib.id ? null : lib.id)} className="accent-primary" />
                       <span className="flex-1">{lib.name}</span>
-                      <input type="checkbox" checked={auxiliaryStyleIds.includes(lib.id)}
-                        onChange={() => setAuxiliaryStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])}
+                      <input type="checkbox" checked={auxStyleIds.includes(lib.id)}
+                        onChange={() => setAuxStyleIds(prev => prev.includes(lib.id) ? prev.filter(x => x !== lib.id) : [...prev, lib.id])}
                         disabled={primaryStyleId === lib.id} className="accent-primary" />
                       <span className="text-text-placeholder w-10">辅</span>
                     </label>
@@ -1866,8 +1976,8 @@ export default function Workspace() {
                 {disassemblies.filter(d => d.current_stage >= 1).length === 0 ? <p className="text-xs text-text-placeholder">暂无已拆解</p> :
                   disassemblies.filter(d => d.current_stage >= 1).map(d => (
                     <label key={d.id} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">
-                      <input type="checkbox" checked={disassemblyIds.includes(d.id)}
-                        onChange={() => setDisassemblyIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
+                      <input type="checkbox" checked={auxDissIds.includes(d.id)}
+                        onChange={() => setAuxDissIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
                       <span>{d.name}</span>
                     </label>
                   ))}
@@ -1877,7 +1987,7 @@ export default function Workspace() {
               <button onClick={() => setGenConfig(prev => ({ ...prev, open: false }))}
                 className="px-4 py-2 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary">取消</button>
               <button onClick={() => {
-                const c = { primaryStyleId, auxIds: auxiliaryStyleIds, dissIds: disassemblyIds }
+                const c = { primaryStyleId, auxStyleIds, primaryPersonalityId, auxPersonalityIds }
                 setGenConfig(prev => ({ ...prev, open: false }))
                 genConfig.onConfirm(c)
               }} className="px-4 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">🤖 确定生成</button>
