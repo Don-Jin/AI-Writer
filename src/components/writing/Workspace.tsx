@@ -1118,12 +1118,20 @@ export default function Workspace() {
     showToast('success', '书名已更新')
   }
 
-  // 面板宽度
-  const [leftWidth, setLeftWidth] = useState(192)
-  const [rightWidth, setRightWidth] = useState(334)
+  // 面板宽度 — 从本地记忆恢复
+  const [leftWidth, setLeftWidth] = useState(() => {
+    try { return parseInt(localStorage.getItem('workspace_leftWidth') || '') || 192 } catch { return 192 }
+  })
+  const [rightWidth, setRightWidth] = useState(() => {
+    try { return parseInt(localStorage.getItem('workspace_rightWidth') || '') || 334 } catch { return 334 }
+  })
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [showFuncBar, setShowFuncBar] = useState(false)
+
+  // 面板宽度变化时持久化
+  useEffect(() => { localStorage.setItem('workspace_leftWidth', String(leftWidth)) }, [leftWidth])
+  useEffect(() => { localStorage.setItem('workspace_rightWidth', String(rightWidth)) }, [rightWidth])
 
   // ========== 校对 ==========
   const handleReview = async () => {
