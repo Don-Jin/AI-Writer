@@ -301,22 +301,25 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
           title="批量提取所有设定">批量提取</button>
       </div>
 
-      {/* 操作栏 */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border flex-wrap">
+      {/* 操作栏 — 手动添加单独一行，AI按钮并排 */}
+      <div className="px-3 py-1.5 border-b border-border space-y-1.5">
         <button onClick={() => { setShowAdd(!showAdd); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true) }}
           className="px-2 py-1 text-xs border border-primary text-primary rounded hover:bg-primary/5">+ 手动添加</button>
-        <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
-          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '生成中...' : '从大纲生成'}</button>
-        <button onClick={startChapterExtract} disabled={!!extracting}
-          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{extracting ? '提取中...' : '从章节提取'}</button>
-        <button onClick={startAiFill} disabled={!!genLoading}
-          className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '补全中...' : 'AI补全'}</button>
-        {(genLoading || extracting) && (
-          <button onClick={handleCancel} className="px-2 py-1 text-xs border border-danger text-danger rounded hover:bg-danger/10">⏹ 取消</button>
-        )}
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-text-placeholder mr-0.5">AI:</span>
+          <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
+            className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+          >{genLoading === cat ? '生成中...' : '从大纲生成'}</button>
+          <button onClick={startChapterExtract} disabled={!!extracting}
+            className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+          >{extracting ? '提取中...' : '从章节提取'}</button>
+          <button onClick={startAiFill} disabled={!!genLoading}
+            className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
+          >{genLoading === cat ? '补全中...' : 'AI补全'}</button>
+          {(genLoading || extracting) && (
+            <button onClick={handleCancel} className="px-1.5 py-0.5 text-[11px] border border-danger text-danger rounded hover:bg-danger/10">⏹ 取消</button>
+          )}
+        </div>
       </div>
 
       {/* 章节提取输入 */}
@@ -372,39 +375,42 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
             {facts.length === 0 ? '暂无设定，点击上方按钮生成或手动添加' : `暂无${CATS.find(c => c.key === cat)?.label}类别数据`}
           </div>
         ) : (
-          <div className="divide-y divide-border">
+          <div className="space-y-1 p-2">
             {filtered.map(f => {
               let details: any = {}
               try { details = typeof f.details === 'string' ? JSON.parse(f.details || '{}') : (f.details || {}) } catch {}
               const isExpanded = expandedId === f.id
 
               return (
-                <div key={f.id} className="hover:bg-bg-secondary/30 transition-colors">
-                  <div className="px-3 py-2 flex items-start justify-between cursor-pointer"
+                <div key={f.id} className="bg-white rounded-card shadow-card overflow-hidden hover-lift group">
+                  <div className="px-3 py-2 cursor-pointer"
                     onClick={() => setExpandedId(isExpanded ? null : f.id)}>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f.is_hard_rule ? 'bg-red-500' : 'bg-gray-300'}`} />
-                        <span className="text-xs font-medium text-text-main truncate">{f.fact_key}</span>
-                        <span className="text-[10px] text-text-placeholder">{f.source}</span>
-                        {f.is_hard_rule
-                          ? <span className="text-[10px] px-1 rounded bg-red-100 text-red-700">硬</span>
-                          : <span className="text-[10px] px-1 rounded bg-gray-100 text-gray-500">软</span>}
+                    <div className="flex items-start gap-2">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${f.is_hard_rule ? 'bg-red-500' : 'bg-gray-300'}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="text-xs font-medium text-text-main">{f.fact_key}</span>
+                          {f.is_hard_rule
+                            ? <span className="text-[10px] px-1 rounded bg-red-100 text-red-700 font-medium">硬</span>
+                            : <span className="text-[10px] px-1 rounded bg-gray-100 text-gray-500">软</span>}
+                          <span className="text-[10px] text-text-placeholder">{f.source}</span>
+                        </div>
+                        <p className="text-xs text-text-secondary leading-relaxed">{f.fact_value}</p>
                       </div>
-                      <p className="text-xs text-text-secondary truncate">{f.fact_value}</p>
-                    </div>
-                    <div className="flex gap-1 ml-2 shrink-0">
-                      <button onClick={(e) => { e.stopPropagation(); toggleHard(f) }}
-                        className="text-xs px-1.5 py-0.5 rounded border border-border-input hover:bg-bg-secondary"
-                        title={f.is_hard_rule ? '降为软设定' : '升为硬规则'}>{f.is_hard_rule ? '降' : '升'}</button>
-                      <button onClick={(e) => { e.stopPropagation(); deleteFact(f.id) }}
-                        className="text-xs px-1.5 py-0.5 rounded border border-border-input hover:bg-red-50 text-text-placeholder hover:text-danger">删</button>
+                      <div className="flex gap-0.5 ml-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={(e) => { e.stopPropagation(); toggleHard(f) }}
+                          className="text-[10px] px-1 py-0.5 rounded hover:bg-bg-secondary text-text-placeholder hover:text-text-main"
+                          title={f.is_hard_rule ? '降为软设定' : '升为硬规则'}>{f.is_hard_rule ? '↓' : '↑'}</button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteFact(f.id) }}
+                          className="text-[10px] px-1 py-0.5 rounded hover:bg-red-50 text-text-placeholder hover:text-danger"
+                          title="删除">✕</button>
+                      </div>
                     </div>
                   </div>
 
                   {/* 展开详情 */}
                   {isExpanded && (
-                    <div className="px-3 pb-2 space-y-1.5" onClick={e => e.stopPropagation()}>
+                    <div className="px-3 pb-2 space-y-1.5 border-t border-border" onClick={e => e.stopPropagation()}>
                       <textarea value={f.fact_value} onChange={e => updateFact(f.id, 'fact_value', e.target.value)}
                         rows={2}
                         className="w-full text-xs border border-border-input rounded px-2 py-1 resize-none focus:outline-none focus:border-primary" />
