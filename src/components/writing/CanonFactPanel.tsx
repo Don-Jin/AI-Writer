@@ -284,37 +284,37 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 头部 */}
-      {/* 类别标签 — 自动换行，缩到最小剩 5 列 */}
-      <div className="flex items-center flex-wrap border-b border-border shrink-0">
+      {/* 类别标签 — 单行 flex-1，和主标签一样挤压不换行 */}
+      <div className="flex items-center border-b border-border shrink-0">
         {CATS.map(c => {
           const count = facts.filter(f => f.fact_category === c.key).length
           return (
             <button key={c.key} onClick={() => setCat(c.key)}
-              className={`px-2.5 py-1.5 text-xs transition-colors
+              className={`flex-1 py-1.5 text-[11px] text-center transition-colors
                 ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
             >{c.label}({count})</button>
           )
         })}
         <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
-          className="px-2 py-1.5 text-xs text-text-secondary hover:text-primary disabled:opacity-50 shrink-0"
+          className="flex-1 py-1.5 text-[11px] text-center text-text-secondary hover:text-primary disabled:opacity-50"
           title="批量提取所有设定">批量提取</button>
       </div>
 
-      {/* 操作栏 — 4 按钮同行，自动换行 */}
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border flex-wrap">
+      {/* 操作栏 — 4 按钮单行 flex-1，挤压不换行 */}
+      <div className="flex items-center border-b border-border shrink-0">
         <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
-          className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '生成中...' : '从大纲生成'}</button>
+          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
+        >{genLoading === cat ? '⏳' : '大纲生成'}</button>
         <button onClick={startChapterExtract} disabled={!!extracting}
-          className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{extracting ? '提取中...' : '从章节提取'}</button>
+          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
+        >{extracting ? '⏳' : '章节提取'}</button>
         <button onClick={startAiFill} disabled={!!genLoading}
-          className="px-1.5 py-0.5 text-[11px] border border-border-input text-text-secondary rounded hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '补全中...' : 'AI补全'}</button>
+          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
+        >{genLoading === cat ? '⏳' : 'AI补全'}</button>
         <button onClick={() => { setShowAdd(!showAdd); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true) }}
-          className="px-1.5 py-0.5 text-[11px] border border-primary text-primary rounded hover:bg-primary/5">+ 手动添加</button>
+          className="flex-1 py-1.5 text-[11px] text-center text-primary hover:bg-primary/5">+ 手动添加</button>
         {(genLoading || extracting) && (
-          <button onClick={handleCancel} className="px-1.5 py-0.5 text-[11px] border border-danger text-danger rounded hover:bg-danger/10">⏹ 取消</button>
+          <button onClick={handleCancel} className="flex-1 py-1.5 text-[11px] text-center text-danger hover:bg-danger/10">⏹ 取消</button>
         )}
       </div>
 
