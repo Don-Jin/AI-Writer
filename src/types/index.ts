@@ -227,6 +227,12 @@ export interface PersonalityProfile {
   human_warmth: string           // 人情温度
   linguistic_personality: string // 语言人格
   reader_relationship: string    // 读者关系
+  // 人味指纹（从小说正文提取，直接注入正文生成）
+  private_imagery: string        // 私人意象：反复出现的独一细节
+  emotional_quirks: string       // 情绪怪癖：角色在极端情绪下的反常反应
+  rhythm_fingerprint: string     // 节奏指纹：何时加速/走神/停顿
+  nonsense_style: string         // 废话风格：叙述者插嘴/角色跑题/重复
+  private_rhetoric: string       // 私人修辞：从生活长出的比喻
   raw_analysis: string           // 综合分析
 }
 

@@ -122,7 +122,19 @@ function buildPersonalityContext(
   if (!projects.length) return ''
   return projects.map(p => {
     const d = p.personality_data || {}
-    return `${p.id === primaryId ? '【主】' : '【辅】'}${p.name}：情感${(d as any).emotional_intensity?.slice(0, 60) || ''}；冲突${(d as any).conflict_depth?.slice(0, 60) || ''}；人情${(d as any).human_warmth?.slice(0, 60) || ''}；语言${(d as any).linguistic_personality?.slice(0, 60) || ''}；读者${(d as any).reader_relationship?.slice(0, 60) || ''}`
+    const parts: string[] = []
+    const add = (label: string, v: string) => { if (v) parts.push(`${label}${v.slice(0, 50)}`) }
+    add('情感：', (d as any).emotional_intensity)
+    add('冲突：', (d as any).conflict_depth)
+    add('人情：', (d as any).human_warmth)
+    add('语言：', (d as any).linguistic_personality)
+    add('读者：', (d as any).reader_relationship)
+    add('意象：', (d as any).private_imagery)
+    add('怪癖：', (d as any).emotional_quirks)
+    add('节奏：', (d as any).rhythm_fingerprint)
+    add('废话：', (d as any).nonsense_style)
+    add('修辞：', (d as any).private_rhetoric)
+    return `${p.id === primaryId ? '【主】' : '【辅】'}${p.name}\n${parts.join('；')}`
   }).join('\n')
 }
 
