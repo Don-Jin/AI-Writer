@@ -289,7 +289,7 @@ function Field({ label, value, path, ef, ev, onEdit, onSave, onChange }: {
 }) {
   return (
     <div className="flex items-start gap-2 text-sm mb-1">
-      <span className="text-text-placeholder shrink-0 w-10">{label}：</span>
+      <span className="text-text-placeholder shrink-0">{label}：</span>
       {ef === path ? (
         <div className="flex-1 flex gap-1">
           <input value={ev} onChange={e => onChange(e.target.value)} className="flex-1 text-sm border-b border-primary px-1 py-0.5 focus:outline-none" autoFocus />
