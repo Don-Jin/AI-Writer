@@ -13,7 +13,7 @@ export default function AppLayout() {
   }, [isWorkspace])
 
   return (
-    <div className="flex h-screen bg-white">
+    <div className="flex h-screen bg-bg-main">
       <Sidebar
         collapsed={collapsed}
         onToggle={collapsed ? () => setCollapsed(false) : () => setCollapsed(true)}

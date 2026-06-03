@@ -1264,7 +1264,7 @@ export default function Workspace() {
   return (
     <div className="flex h-full">
       {/* ===== 左栏：章节目录 ===== */}
-      <aside className="shrink-0 bg-white border-r border-border flex flex-col" style={{ width: leftWidth }}>
+      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: leftWidth }}>
         <div className="px-3 py-2.5 border-b border-border bg-bg-secondary">
           <button onClick={() => navigate('/')} className="text-xs text-text-secondary hover:text-primary">← 返回</button>
           {renaming ? (
@@ -1535,15 +1535,16 @@ export default function Workspace() {
         )}
 
         {/* 编辑器 */}
-        <div className="flex-1 px-4 py-2 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-auto py-6 px-8">
+          <div className="max-w-[860px] mx-auto h-full">
           {(streamingText || generating) && genTarget === `第${selectedChapter}章` ? (
-            <div className="w-full h-full px-4 py-3 border border-primary/30 rounded-card bg-primary-light/5 overflow-auto flex flex-col">
-              <div className="sticky top-0 z-10 flex items-center gap-2 mb-2 pb-2 border-b border-primary/10 bg-primary-light/5">
+            <div className="w-full h-full shadow-card rounded-card overflow-auto flex flex-col">
+              <div className="sticky top-0 z-10 flex items-center gap-2 px-6 py-3 bg-white/80 backdrop-blur border-b border-border">
                 <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <span className="text-xs text-primary">AI 正在写作中...</span>
+                <span className="text-xs text-text-secondary">AI 正在写作中...</span>
                 <button onClick={() => handleCancel()} className="ml-auto px-2 py-0.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
               </div>
-              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans flex-1 min-h-0 overflow-auto">
+              <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans flex-1 min-h-0 overflow-auto p-8">
                 {streamingText || '...'}
               </pre>
             </div>
@@ -1551,12 +1552,13 @@ export default function Workspace() {
             <textarea
               value={editingContent}
               onChange={(e) => setEditingContent(e.target.value)}
-              className="w-full h-full min-h-[300px] px-4 py-3 border border-border-input rounded-card text-base leading-relaxed
-                focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-none
-                bg-white"
+              className="w-full h-full min-h-[400px] px-10 py-8 text-base leading-relaxed
+                focus:outline-none focus:shadow-glow rounded-card resize-none
+                bg-white shadow-card placeholder:text-text-placeholder"
               placeholder="在左侧目录选择章节，点击「生成本章」开始..."
             />
           )}
+          </div>
         </div>
       </main>
 
@@ -1567,7 +1569,7 @@ export default function Workspace() {
       />
 
       {/* ===== 右栏：工具面板 ===== */}
-      <aside className="shrink-0 bg-white border-l border-border flex flex-col" style={{ width: rightWidth }}>
+      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: rightWidth }}>
         {/* Tab 切换 */}
         <div className="flex border-b border-border shrink-0">
           {(['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
