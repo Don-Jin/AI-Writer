@@ -306,6 +306,7 @@ export interface ElectronAPI {
   parseFile: (filePath: string) => Promise<string>
   app: {
     getPath: (name: string) => Promise<string>
+    checkUpdate: () => Promise<{ hasUpdate?: boolean; currentVersion?: string; latestVersion?: string; url?: string; name?: string; body?: string; error?: string }>
   }
 }
 

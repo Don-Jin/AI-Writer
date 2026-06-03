@@ -341,6 +341,33 @@ function registerIpcHandlers() {
   ipcMain.handle('app:getPath', (_event, name: string) => {
     return app.getPath(name as any)
   })
+
+  ipcMain.handle('app:checkUpdate', async () => {
+    try {
+      const currentVersion = `v${app.getVersion()}`
+      const res = await fetch('https://api.github.com/repos/223151/AI-Writer/releases/latest', {
+        headers: { 'User-Agent': 'AI-Novel-Writer' }
+      })
+      if (!res.ok) return { error: '检查失败（网络问题）' }
+      const release = await res.json() as any
+      const tag = release.tag_name
+      if (!tag) return { error: '检查失败' }
+      if (tag !== currentVersion) {
+        const asset = release.assets?.find((a: any) => a.name?.endsWith('.exe'))
+        return {
+          hasUpdate: true,
+          currentVersion,
+          latestVersion: tag,
+          url: asset?.browser_download_url || release.html_url,
+          name: release.name || tag,
+          body: release.body?.slice(0, 500) || '',
+        }
+      }
+      return { hasUpdate: false, currentVersion }
+    } catch (e: any) {
+      return { error: e.message || '检查失败' }
+    }
+  })
 }
 
 // ==================== 应用生命周期 ====================

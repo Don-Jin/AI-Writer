@@ -56,5 +56,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 应用
   app: {
     getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
+    checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   },
 })

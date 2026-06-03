@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<any>(null)
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -88,6 +90,22 @@ export default function SettingsPage() {
     } catch (e: any) {
       showToast('error', '连接失败：' + (e.message || '未知错误'))
     } finally { setTesting(false) }
+  }
+
+  const checkUpdate = async () => {
+    setChecking(true)
+    setUpdateInfo(null)
+    try {
+      if (window.electronAPI) {
+        const result = await window.electronAPI.app.checkUpdate()
+        setUpdateInfo(result)
+        if (result.error) showToast('error', result.error)
+        else if (result.hasUpdate) showToast('info', `发现新版本 ${result.latestVersion}`)
+        else showToast('success', '已是最新版本')
+      }
+    } catch (e: any) {
+      showToast('error', '检查失败：' + (e.message || ''))
+    } finally { setChecking(false) }
   }
 
   const currentProvider = PROVIDERS.find(p => p.key === provider)
@@ -198,6 +216,34 @@ export default function SettingsPage() {
             {testing ? '⏳ 测试中...' : '🔍 测试连接'}
           </button>
         </div>
+      </div>
+
+      {/* 版本更新 */}
+      <div className="bg-white rounded-card border border-border p-5 max-w-lg mt-4">
+        <h2 className="text-section-title text-text-main mb-3">🔄 版本更新</h2>
+        <p className="text-body text-text-secondary mb-3">当前版本：{updateInfo?.currentVersion || 'v1.6.0'}</p>
+        <button
+          onClick={checkUpdate}
+          disabled={checking}
+          className={`px-4 py-2 rounded-btn text-body transition-colors
+            ${checking ? 'bg-border text-text-placeholder' : 'bg-primary text-white hover:bg-primary-hover'}
+          `}
+        >
+          {checking ? '⏳ 检查中...' : '🔍 检查更新'}
+        </button>
+        {updateInfo && updateInfo.hasUpdate && (
+          <div className="mt-3 p-3 bg-primary-light/10 border border-primary/20 rounded">
+            <p className="text-sm font-medium text-text-main">发现新版本：{updateInfo.latestVersion}</p>
+            {updateInfo.body && <pre className="text-xs text-text-secondary mt-1 whitespace-pre-wrap">{updateInfo.body}</pre>}
+            <a href={updateInfo.url} target="_blank" rel="noreferrer"
+              className="inline-block mt-2 px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+              前往下载
+            </a>
+          </div>
+        )}
+        {updateInfo && !updateInfo.hasUpdate && !updateInfo.error && (
+          <p className="mt-2 text-xs text-success">✅ 已是最新版本</p>
+        )}
       </div>
 
       {/* 使用说明 */}
