@@ -118,7 +118,7 @@ function buildSettingContext(
   }).join('\n\n')
 }
 
-/** 构建风格库上下文（正文用） */
+/** 构建风格库上下文（正文用） — v3 丰富约束 */
 function buildStyleContext(
   primaryStyleId: number | null, auxStyleIds: number[],
   styleLibraries: StyleLibrary[]
@@ -129,22 +129,42 @@ function buildStyleContext(
   return styles.map((s) => {
     const p = s.style_profile as any
     const parts: string[] = []
-    // 兼容新旧两种提取格式
-    if (p?.narrative) {
-      // 新格式
-      const n = p.narrative
-      if (n?.perspective || n?.distance) parts.push(`叙事：${[n?.perspective, n?.distance].filter(Boolean).join('，')}`)
-      if (p?.sentence_rhythm) parts.push(`句式：${p.sentence_rhythm}`)
-      const langParts = [p?.language?.vocabulary, p?.language?.dialogue].filter(Boolean)
-      if (langParts.length) parts.push(`语言：${langParts.join('；')}`)
-      const pgParts = [p?.paragraph?.ratio, p?.paragraph?.habit].filter(Boolean)
-      if (pgParts.length) parts.push(`段落：${pgParts.join('；')}`)
-      if (p?.atmosphere?.tone || p?.atmosphere?.emotion_style) parts.push(`氛围：${[p?.atmosphere?.tone, p?.atmosphere?.emotion_style].filter(Boolean).join('，')}`)
+    const n = p?.narrative
+    const rh = p?.sentence_rhythm
+    const pg = p?.paragraph
+    const l = p?.language
+    const a = p?.atmosphere
+
+    // v3 格式（sentence_rhythm 是对象）
+    if (rh && typeof rh === 'object') {
+      if (n?.perspective || n?.pov_rules) parts.push(`【叙事】${[n.perspective, n.pov_rules].filter(Boolean).join('。')}`)
+      if (n?.narrator_intrusion) parts.push(`叙事者插嘴：${n.narrator_intrusion}`)
+      const srParts = [`短≤${rh.short_max || '?'}字`, `长≥${rh.long_min || '?'}字`]
+      if (rh.exception) srParts.push(`例外：${rh.exception}`)
+      if (rh.density) srParts.push(`密度：${rh.density}`)
+      parts.push(`【句式】${srParts.join('。')}`)
+      if (pg?.by_scene_type) parts.push(`【段落】${pg.by_scene_type}`)
+      if (pg?.habit) parts.push(`段落习惯：${pg.habit}`)
+      if (pg?.forbidden) parts.push(`禁止：${pg.forbidden}`)
+      if (l?.vocab_level) parts.push(`【词汇】${l.vocab_level}`)
+      if (l?.dialogue_vs_narrative) parts.push(`叙事vs对话：${l.dialogue_vs_narrative}`)
+      if (l?.forbidden_words) parts.push(`禁用词类型：${l.forbidden_words}`)
+      if (a?.emotion_scale) parts.push(`【情绪档位】${a.emotion_scale}`)
+      if (a?.level_triggers) parts.push(`升档触发：${a.level_triggers}`)
+      if (a?.must_downgrade) parts.push(`降档场景：${a.must_downgrade}`)
     } else {
-      // 旧格式 — 回退
+      // v2 格式（sentence_rhythm 是字符串或其他）
+      if (n?.perspective || n?.distance) parts.push(`叙事：${[n?.perspective, n?.distance].filter(Boolean).join('，')}`)
+      if (p?.sentence_rhythm && typeof p?.sentence_rhythm === 'string') parts.push(`句式：${p.sentence_rhythm}`)
+      if (l?.vocabulary || l?.dialogue) parts.push(`语言：${[l?.vocabulary, l?.dialogue].filter(Boolean).join('；')}`)
+      if (pg?.ratio || pg?.habit) parts.push(`段落：${[pg?.ratio, pg?.habit].filter(Boolean).join('；')}`)
+      if (a?.tone || a?.emotion_style) parts.push(`氛围：${[a?.tone, a?.emotion_style].filter(Boolean).join('，')}`)
+    }
+
+    // 旧格式 — 回退
+    if (!parts.length) {
       const ws = p?.writing_style
       const lf = p?.language_features
-      const a = p?.atmosphere
       if (ws?.narrative_perspective) parts.push(`叙事：${ws.narrative_perspective}`)
       if (ws?.sentence_characteristics || ws?.pace) parts.push(`句式：${[ws?.sentence_characteristics, ws?.pace].filter(Boolean).join('，')}`)
       if (ws?.paragraph_ratio) parts.push(`段落：${ws.paragraph_ratio}`)
@@ -152,11 +172,11 @@ function buildStyleContext(
       if (a?.primary || a?.emotional_tone) parts.push(`氛围：${[a?.primary, a?.emotional_tone].filter(Boolean).join('，')}`)
     }
     if (!parts.length) return ''
-    return `${s.id === primaryStyleId ? '【主】' : '【辅】'}${s.name}\n${parts.join('\n')}`
+    return `${s.id === primaryStyleId ? '【主约束】' : '【辅约束】'}${s.name}\n${parts.join('\n')}`
   }).join('\n')
 }
 
-/** 构建人格库上下文（正文用） */
+/** 构建人格库上下文（正文用） — v2 丰富材料池 */
 function buildPersonalityContext(
   primaryId: number | null, auxIds: number[],
   personalityProjects: PersonalityProject[]
@@ -167,15 +187,14 @@ function buildPersonalityContext(
   return projects.map(p => {
     const d = p.personality_data || {}
     const parts: string[] = []
-    const add = (label: string, v: string) => { if (v) parts.push(`${label}${v.slice(0, 50)}`) }
-    // 只注入5个人味维度——它们直接告诉AI怎么写，5个抽象维度不注入（AI无法落地）
-    add('意象：', (d as any).private_imagery)
-    add('怪癖：', (d as any).emotional_quirks)
-    add('节奏：', (d as any).rhythm_fingerprint)
-    add('废话：', (d as any).nonsense_style)
-    add('修辞：', (d as any).private_rhetoric)
+    const add = (label: string, v: string) => { if (v && v.length > 5) parts.push(`${label}：${v.slice(0, 150)}`) }
+    add('【私人意象】', (d as any).private_imagery)
+    add('【情绪怪癖】', (d as any).emotional_quirks)
+    add('【节奏指纹】', (d as any).rhythm_fingerprint)
+    add('【废话风格】', (d as any).nonsense_style)
+    add('【私人修辞】', (d as any).private_rhetoric)
     if (!parts.length) return ''
-    return `${p.id === primaryId ? '【主】' : '【辅】'}${p.name}\n${parts.join('；')}`
+    return `${p.id === primaryId ? '【主人格】' : '【辅人格】'}${p.name}\n${parts.join('\n')}`
   }).join('\n')
 }
 
