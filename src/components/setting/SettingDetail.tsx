@@ -47,9 +47,9 @@ export default function SettingDetail() {
     cancelledRef.current = false
     try {
       const prompt = extractCat === 'characters'
-        ? `从以下小说中只提取角色信息。输出JSON：{"characters":[{"name":"角色名","info":"身份描述","abilities":"能力","role":"main/support/antagonist/minor"}]}`
+        ? `从以下小说中只提取角色信息。输出JSON：{"characters":[{"name":"角色名","info":"身份描述","abilities":"能力","role":"主角/配角/反派/次要"}]}`
         : extractCat === 'worlds'
-          ? `从以下小说中只提取世界观信息。输出JSON：{"worlds":[{"name":"名称","description":"描述","category":"location/faction/organization"}]}`
+          ? `从以下小说中只提取世界观信息。输出JSON：{"worlds":[{"name":"名称","description":"描述","category":"地点/势力/组织"}]}`
           : extractCat === 'rules'
             ? `从以下小说中只提取规则体系。输出JSON：{"rules":[{"name":"规则名","description":"规则描述"}]}`
             : `从以下小说中只提取角色关系。输出JSON：{"relationships":[{"char_a":"角色A","char_b":"角色B","relation":"关系类型","description":"关系描述"}]}`
@@ -132,10 +132,10 @@ export default function SettingDetail() {
     const newData = JSON.parse(JSON.stringify(data))
     if (cat === 'characters') {
       if (!addForm.name?.trim()) return
-      newData.characters.push({ name: addForm.name, info: addForm.info || '', abilities: addForm.abilities || '', role: addForm.role || 'support' })
+      newData.characters.push({ name: addForm.name, info: addForm.info || '', abilities: addForm.abilities || '', role: addForm.role || '配角' })
     } else if (cat === 'worlds') {
       if (!addForm.name?.trim()) return
-      newData.worlds.push({ name: addForm.name, description: addForm.description || '', category: addForm.category || 'location' })
+      newData.worlds.push({ name: addForm.name, description: addForm.description || '', category: addForm.category || '地点' })
     } else if (cat === 'rules') {
       if (!addForm.name?.trim()) return
       newData.rules.push({ name: addForm.name, description: addForm.description || '' })
@@ -256,12 +256,12 @@ export default function SettingDetail() {
                 <Field label="姓名" value={item.name} path={`characters.${i}.name`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
                 <Field label="身份" value={item.info} path={`characters.${i}.info`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
                 <Field label="能力" value={item.abilities} path={`characters.${i}.abilities`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
-                <Field label="定位" value={item.role} path={`characters.${i}.role`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
+                <Field label="定位" value={(({main:'主角',support:'配角',antagonist:'反派',minor:'次要'} as any)[item.role] || item.role)} path={`characters.${i}.role`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
               </>}
               {cat === 'worlds' && <>
                 <Field label="名称" value={item.name} path={`worlds.${i}.name`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
                 <Field label="描述" value={item.description} path={`worlds.${i}.description`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
-                <Field label="类别" value={item.category} path={`worlds.${i}.category`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
+                <Field label="类别" value={(({location:'地点',faction:'势力',organization:'组织'} as any)[item.category] || item.category)} path={`worlds.${i}.category`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
               </>}
               {cat === 'rules' && <>
                 <Field label="名称" value={item.name} path={`rules.${i}.name`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
