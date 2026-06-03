@@ -107,8 +107,32 @@ function buildStyleContext(
   const styles = styleLibraries.filter(l => ids.includes(l.id))
   if (!styles.length) return ''
   return styles.map((s) => {
-    const p = s.style_profile
-    return `${s.id === primaryStyleId ? '【主】' : '【辅】'}${s.name}：${p?.writing_style?.narrative_perspective || ''}，${p?.writing_style?.sentence_characteristics || ''}，${p?.atmosphere?.primary || ''}/${p?.atmosphere?.emotional_tone || ''}`
+    const p = s.style_profile as any
+    const parts: string[] = []
+    // 兼容新旧两种提取格式
+    if (p?.narrative) {
+      // 新格式
+      const n = p.narrative
+      if (n?.perspective || n?.distance) parts.push(`叙事：${[n?.perspective, n?.distance].filter(Boolean).join('，')}`)
+      if (p?.sentence_rhythm) parts.push(`句式：${p.sentence_rhythm}`)
+      const langParts = [p?.language?.vocabulary, p?.language?.dialogue].filter(Boolean)
+      if (langParts.length) parts.push(`语言：${langParts.join('；')}`)
+      const pgParts = [p?.paragraph?.ratio, p?.paragraph?.habit].filter(Boolean)
+      if (pgParts.length) parts.push(`段落：${pgParts.join('；')}`)
+      if (p?.atmosphere?.tone || p?.atmosphere?.emotion_style) parts.push(`氛围：${[p?.atmosphere?.tone, p?.atmosphere?.emotion_style].filter(Boolean).join('，')}`)
+    } else {
+      // 旧格式 — 回退
+      const ws = p?.writing_style
+      const lf = p?.language_features
+      const a = p?.atmosphere
+      if (ws?.narrative_perspective) parts.push(`叙事：${ws.narrative_perspective}`)
+      if (ws?.sentence_characteristics || ws?.pace) parts.push(`句式：${[ws?.sentence_characteristics, ws?.pace].filter(Boolean).join('，')}`)
+      if (ws?.paragraph_ratio) parts.push(`段落：${ws.paragraph_ratio}`)
+      if (lf?.vocabulary_preference || lf?.dialogue_style) parts.push(`语言：${[lf?.vocabulary_preference, lf?.dialogue_style].filter(Boolean).join('；')}`)
+      if (a?.primary || a?.emotional_tone) parts.push(`氛围：${[a?.primary, a?.emotional_tone].filter(Boolean).join('，')}`)
+    }
+    if (!parts.length) return ''
+    return `${s.id === primaryStyleId ? '【主】' : '【辅】'}${s.name}\n${parts.join('\n')}`
   }).join('\n')
 }
 
