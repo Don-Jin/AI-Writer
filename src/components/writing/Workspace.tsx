@@ -124,16 +124,13 @@ function buildPersonalityContext(
     const d = p.personality_data || {}
     const parts: string[] = []
     const add = (label: string, v: string) => { if (v) parts.push(`${label}${v.slice(0, 50)}`) }
-    add('情感：', (d as any).emotional_intensity)
-    add('冲突：', (d as any).conflict_depth)
-    add('人情：', (d as any).human_warmth)
-    add('语言：', (d as any).linguistic_personality)
-    add('读者：', (d as any).reader_relationship)
+    // 只注入5个人味维度——它们直接告诉AI怎么写，5个抽象维度不注入（AI无法落地）
     add('意象：', (d as any).private_imagery)
     add('怪癖：', (d as any).emotional_quirks)
     add('节奏：', (d as any).rhythm_fingerprint)
     add('废话：', (d as any).nonsense_style)
     add('修辞：', (d as any).private_rhetoric)
+    if (!parts.length) return ''
     return `${p.id === primaryId ? '【主】' : '【辅】'}${p.name}\n${parts.join('；')}`
   }).join('\n')
 }
