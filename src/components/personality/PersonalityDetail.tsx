@@ -58,7 +58,7 @@ export default function PersonalityDetail() {
   const cancelledRef = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
-  const [viewTab, setViewTab] = useState<'abstract' | 'humantouch'>('abstract')
+  const [viewTab] = useState<'humantouch'>('humantouch')
 
   useEffect(() => {
     return () => {
@@ -82,11 +82,6 @@ export default function PersonalityDetail() {
             ? JSON.parse(proj.personality_data || '{}')
             : (proj.personality_data || {})
           setProfile({
-            emotional_intensity: data.emotional_intensity || '',
-            conflict_depth: data.conflict_depth || '',
-            human_warmth: data.human_warmth || '',
-            linguistic_personality: data.linguistic_personality || '',
-            reader_relationship: data.reader_relationship || '',
             private_imagery: data.private_imagery || '',
             emotional_quirks: data.emotional_quirks || '',
             rhythm_fingerprint: data.rhythm_fingerprint || '',
@@ -145,11 +140,6 @@ export default function PersonalityDetail() {
       if (!parsed) { showToast('error', 'AI 返回格式异常'); return }
 
       const newProfile = {
-        emotional_intensity: parsed.emotional_intensity || '',
-        conflict_depth: parsed.conflict_depth || '',
-        human_warmth: parsed.human_warmth || '',
-        linguistic_personality: parsed.linguistic_personality || '',
-        reader_relationship: parsed.reader_relationship || '',
         private_imagery: parsed.private_imagery || '',
         emotional_quirks: parsed.emotional_quirks || '',
         rhythm_fingerprint: parsed.rhythm_fingerprint || '',
@@ -176,7 +166,7 @@ export default function PersonalityDetail() {
   if (error) return <div className="flex justify-center py-24 text-text-secondary">错误：{error}</div>
   if (!project) return <div className="flex justify-center py-24 text-text-secondary">项目不存在或已被删除 (id={id})</div>
 
-  const hasData = !!(profile.emotional_intensity)
+  const hasData = !!(profile.private_imagery || profile.emotional_quirks || profile.rhythm_fingerprint)
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -217,46 +207,6 @@ export default function PersonalityDetail() {
         <p className="text-xs text-text-placeholder mb-6 text-center">手动模式 — 直接在下方填写各维度</p>
       )}
 
-      {/* 子标签：抽象人格 / 人味指纹 */}
-      <div className="flex border-b border-border mb-4">
-        {(['abstract', 'humantouch'] as const).map(t => (
-          <button key={t} onClick={() => setViewTab(t)}
-            className={`flex-1 py-1.5 text-sm text-center transition-colors
-              ${viewTab === t ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
-          >{{ abstract: '抽象人格', humantouch: '人味指纹' }[t]}</button>
-        ))}
-      </div>
-
-      {viewTab === 'abstract' ? (
-      <div className="space-y-4">
-        <div className="bg-white rounded-card border border-border p-4">
-          <h3 className="text-sm font-medium text-text-main mb-3">情感强度</h3>
-          <Field label="情感强度" path={['emotional_intensity']} profile={profile} onSave={saveField} />
-        </div>
-        <div className="bg-white rounded-card border border-border p-4">
-          <h3 className="text-sm font-medium text-text-main mb-3">冲突深度</h3>
-          <Field label="冲突深度" path={['conflict_depth']} profile={profile} onSave={saveField} />
-        </div>
-        <div className="bg-white rounded-card border border-border p-4">
-          <h3 className="text-sm font-medium text-text-main mb-3">人情温度</h3>
-          <Field label="人情温度" path={['human_warmth']} profile={profile} onSave={saveField} />
-        </div>
-        <div className="bg-white rounded-card border border-border p-4">
-          <h3 className="text-sm font-medium text-text-main mb-3">语言人格</h3>
-          <Field label="语言人格" path={['linguistic_personality']} profile={profile} onSave={saveField} />
-        </div>
-        <div className="bg-white rounded-card border border-border p-4">
-          <h3 className="text-sm font-medium text-text-main mb-3">读者关系</h3>
-          <Field label="读者关系" path={['reader_relationship']} profile={profile} onSave={saveField} />
-        </div>
-        {profile.raw_analysis && (
-          <div className="bg-white rounded-card border border-border p-4">
-            <h3 className="text-sm font-medium text-text-main mb-3">综合分析</h3>
-            <Field label="综合分析" path={['raw_analysis']} profile={profile} onSave={saveField} />
-          </div>
-        )}
-      </div>
-      ) : (
       <div className="space-y-4">
         <div className="bg-white rounded-card border border-border p-4">
           <h3 className="text-sm font-medium text-text-main mb-3">私人意象</h3>
@@ -278,8 +228,13 @@ export default function PersonalityDetail() {
           <h3 className="text-sm font-medium text-text-main mb-3">私人修辞</h3>
           <Field label="私人修辞" path={['private_rhetoric']} profile={profile} onSave={saveField} />
         </div>
+        {profile.raw_analysis && (
+          <div className="bg-white rounded-card border border-border p-4">
+            <h3 className="text-sm font-medium text-text-main mb-3">综合分析</h3>
+            <Field label="综合分析" path={['raw_analysis']} profile={profile} onSave={saveField} />
+          </div>
+        )}
       </div>
-      )}
     </div>
   )
 }

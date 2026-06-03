@@ -91,9 +91,29 @@ function buildSettingContext(
     const rules = (d as any).rules || []
     const prefix = l.id === primaryId ? '【主设定】' : '【辅设定】'
     let ctx = `${prefix}《${l.name}》`
-    if (chars.length) ctx += `\n角色(${chars.length}个)：${chars.map((c: any) => `${c.name}(${c.info || c.role || ''})`).join('、')}`
-    if (worlds.length) ctx += `\n世界观(${worlds.length}个)：${worlds.map((w: any) => w.name).join('、')}`
-    if (rules.length) ctx += `\n规则(${rules.length}个)：${rules.map((r: any) => `${r.name}:${r.description}`).join('；')}`
+    if (chars.length) {
+      ctx += `\n角色(${chars.length}个)：`
+      ctx += chars.map((c: any) => {
+        const parts = [c.name]
+        if (c.info) parts.push(`身份：${c.info}`)
+        if (c.abilities) parts.push(`能力：${c.abilities}`)
+        if (c.role) parts.push(`定位：${c.role}`)
+        return parts.join('，')
+      }).join('；')
+    }
+    if (worlds.length) {
+      ctx += `\n世界观(${worlds.length}个)：`
+      ctx += worlds.map((w: any) => {
+        const parts = [w.name]
+        if (w.description) parts.push(w.description)
+        if (w.category) parts.push(`类别：${w.category}`)
+        return parts.join('：')
+      }).join('；')
+    }
+    if (rules.length) {
+      ctx += `\n规则(${rules.length}个)：`
+      ctx += rules.map((r: any) => `${r.name}：${r.description || ''}`).join('；')
+    }
     return ctx
   }).join('\n\n')
 }
@@ -1529,8 +1549,8 @@ export default function Workspace() {
                   </div>
                   <div className="flex-1">
                     <h4 className="text-xs font-medium text-text-main mb-1">🧠 人格库</h4>
-                    {personalityProjects.filter(p => !!(p.personality_data as any)?.emotional_intensity).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
-                      personalityProjects.filter(p => !!(p.personality_data as any)?.emotional_intensity).map(p => {
+                    {personalityProjects.filter(p => !!((p.personality_data as any)?.private_imagery || (p.personality_data as any)?.emotional_quirks)).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
+                      personalityProjects.filter(p => !!((p.personality_data as any)?.private_imagery || (p.personality_data as any)?.emotional_quirks)).map(p => {
                         const isPrimary = primaryPersonalityId === p.id
                         return (
                         <div key={p.id} className="flex items-center gap-1.5 text-xs py-0.5">

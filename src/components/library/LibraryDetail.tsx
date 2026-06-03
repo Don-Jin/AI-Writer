@@ -141,37 +141,53 @@ export default function LibraryDetail() {
         </div>
         <p className="text-xs text-text-placeholder mb-4">💡 点击任意字段直接编辑，失焦自动保存</p>
 
-        {/* 写作风格 */}
-        <Section title="✍️ 写作风格（AI生成时读取）">
+        {(p.writing_style || p.narrative) ? <>
+        {/* 叙事 */}
+        <Section title="叙事视角与距离">
+          <Field label="视角" path={['narrative', 'perspective']} />
+          <Field label="叙事距离" path={['narrative', 'distance']} multiline />
+        </Section>
+
+        {/* 句式节奏 */}
+        <Section title="句式与节奏">
+          <Field label="句式节奏" path={['sentence_rhythm']} multiline />
+        </Section>
+
+        {/* 语言 */}
+        <Section title="语言特点">
+          <Field label="词汇偏好" path={['language', 'vocabulary']} multiline />
+          <Field label="对话风格" path={['language', 'dialogue']} multiline />
+        </Section>
+
+        {/* 段落 */}
+        <Section title="段落配比">
+          <Field label="段长比例" path={['paragraph', 'ratio']} />
+          <Field label="段落习惯" path={['paragraph', 'habit']} multiline />
+        </Section>
+
+        {/* 氛围 */}
+        <Section title="氛围基调">
+          <Field label="整体基调" path={['atmosphere', 'tone']} />
+          <Field label="情绪表达" path={['atmosphere', 'emotion_style']} multiline />
+        </Section>
+        </> : <>
+        {/* 旧格式 — 兼容 */}
+        <Section title="✍️ 写作风格">
           <Field label="叙事视角" path={['writing_style', 'narrative_perspective']} multiline />
           <Field label="句式特点" path={['writing_style', 'sentence_characteristics']} multiline />
           <Field label="段落配比" path={['writing_style', 'paragraph_ratio']} multiline />
-          <Field label="节奏感" path={['writing_style', 'pace']} multiline />
         </Section>
-
-        {/* 语言特点 */}
-        <Section title="💬 语言特点（AI生成时读取）">
+        <Section title="💬 语言特点">
           <Field label="词汇偏好" path={['language_features', 'vocabulary_preference']} multiline />
-          <Field label="口语化程度" path={['language_features', 'colloquial_level']} />
-          <Field label="文白比例" path={['language_features', 'literary_ratio']} />
         </Section>
-
-        {/* 修辞手法 */}
-        <Section title="🎨 修辞手法">
-          <Field label="比喻" path={['rhetoric', 'metaphor']} multiline />
-          <Field label="排比" path={['rhetoric', 'parallelism']} />
-          <Field label="象征" path={['rhetoric', 'symbolism']} multiline />
-        </Section>
-
-        {/* 氛围基调 */}
-        <Section title="🎭 氛围基调（AI生成时读取）">
+        <Section title="🎭 氛围基调">
           <Field label="主要氛围" path={['atmosphere', 'primary']} />
-          <Field label="次要氛围" path={['atmosphere', 'secondary']} />
           <Field label="情感基调" path={['atmosphere', 'emotional_tone']} multiline />
         </Section>
+        </>}
 
         {/* 综合分析 */}
-        <Section title="📝 综合分析（AI生成时作为风格描述读取）">
+        <Section title="📝 综合分析">
           <Field label="综合分析" path={['raw_analysis']} multiline />
         </Section>
       </div>

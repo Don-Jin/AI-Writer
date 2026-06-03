@@ -222,12 +222,6 @@ export interface SettingLibrary {
 
 // ========== 人格库 ==========
 export interface PersonalityProfile {
-  emotional_intensity: string    // 情感强度
-  conflict_depth: string         // 冲突深度
-  human_warmth: string           // 人情温度
-  linguistic_personality: string // 语言人格
-  reader_relationship: string    // 读者关系
-  // 人味指纹（从小说正文提取，直接注入正文生成）
   private_imagery: string        // 私人意象：反复出现的独一细节
   emotional_quirks: string       // 情绪怪癖：角色在极端情绪下的反常反应
   rhythm_fingerprint: string     // 节奏指纹：何时加速/走神/停顿

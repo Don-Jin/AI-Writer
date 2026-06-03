@@ -190,7 +190,7 @@ export default function PersonalityList() {
 function PersonalityCard({ project, onClick, onDelete }: {
   project: PersonalityProject; onClick: () => void; onDelete: () => void
 }) {
-  const hasData = !!(project.personality_data?.emotional_intensity)
+  const hasData = !!(project.personality_data?.private_imagery || (project.personality_data as any)?.emotional_quirks)
 
   return (
     <div onClick={onClick}
