@@ -1121,6 +1121,9 @@ export default function Workspace() {
   // 面板宽度
   const [leftWidth, setLeftWidth] = useState(192)
   const [rightWidth, setRightWidth] = useState(334)
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
+  const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [showFuncBar, setShowFuncBar] = useState(false)
 
   // ========== 校对 ==========
   const handleReview = async () => {
@@ -1264,10 +1267,14 @@ export default function Workspace() {
   return (
     <div className="flex h-full">
       {/* ===== 左栏：章节目录 ===== */}
-      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: leftWidth }}>
-        <div className="px-3 py-2.5 border-b border-border bg-bg-secondary">
-          <button onClick={() => navigate('/')} className="text-xs text-text-secondary hover:text-primary">← 返回</button>
-          {renaming ? (
+      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: leftCollapsed ? 36 : leftWidth }}>
+        <div className="px-2 py-2.5 border-b border-border bg-bg-secondary flex items-center gap-1">
+          <button onClick={() => setLeftCollapsed(!leftCollapsed)}
+            className="text-xs text-text-placeholder hover:text-text-main shrink-0 w-5 h-5 flex items-center justify-center"
+            title={leftCollapsed ? '展开目录' : '折叠目录'}
+          >{leftCollapsed ? '▶' : '◀'}</button>
+          {!leftCollapsed && <button onClick={() => navigate('/')} className="text-xs text-text-secondary hover:text-primary">← 返回</button>}
+          {!leftCollapsed && renaming ? (
             <input
               autoFocus
               value={renameText}
@@ -1277,12 +1284,13 @@ export default function Workspace() {
               className="w-full mt-0.5 text-sm font-medium px-1 py-0.5 border border-primary rounded"
             />
           ) : (
-            <h2 onClick={startRename} className="text-sm font-medium text-text-main mt-0.5 truncate cursor-pointer hover:text-primary" title="点击改名">
+            !leftCollapsed ? <h2 onClick={startRename} className="text-sm font-medium text-text-main mt-0.5 truncate cursor-pointer hover:text-primary" title="点击改名">
               {project.title}
-            </h2>
+            </h2> : null
           )}
         </div>
-        <div className="flex-1 overflow-auto py-1">
+        {!leftCollapsed && <>
+          <div className="flex-1 overflow-auto py-1">
           {/* 新建章按钮 */}
           <button
             onClick={addChapter}
@@ -1318,11 +1326,12 @@ export default function Workspace() {
               </div>
             ))
           )}
-        </div>
-        <div className="px-3 py-2 border-t border-border text-xs text-text-placeholder flex justify-between">
-          <span>{chapters.filter(c => c.status !== 'draft').length}/{chapterPlans.length} 章已写</span>
-          <button onClick={addChapter} className="hover:text-primary">＋</button>
-        </div>
+          </div>
+          <div className="px-3 py-2 border-t border-border text-xs text-text-placeholder flex justify-between">
+            <span>{chapters.filter(c => c.status !== 'draft').length}/{chapterPlans.length} 章已写</span>
+            <button onClick={addChapter} className="hover:text-primary">＋</button>
+          </div>
+        </>}
       </aside>
 
       {/* 左-中分隔线 */}
@@ -1372,16 +1381,25 @@ export default function Workspace() {
           </div>
         </div>
 
-        {/* 细纲提示 */}
+        {/* 细纲提示 — 默认折叠 */}
         {(() => {
           const plan = chapterPlans.find(p => p.chapter_number === selectedChapter) as any
           if (!plan) return null
           return (
             <div className="px-4 pt-2">
-              <div className="bg-primary-light/10 rounded border border-primary/10 px-3 py-1.5 text-xs flex flex-wrap gap-x-3">
-                <span><span className="text-text-placeholder">功能：</span>{plan.function || '—'}</span>
-                {plan.emotional_goal && <span><span className="text-text-placeholder">情绪：</span>{plan.emotional_goal}</span>}
-                <span className="truncate"><span className="text-text-placeholder">概要：</span>{plan.summary}</span>
+              <div className="bg-primary-light/10 rounded border border-primary/10 text-xs">
+                <button onClick={() => setShowFuncBar(!showFuncBar)}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:text-text-main">
+                  <span className="truncate">第{selectedChapter}章 · {plan.function || '—'}{plan.emotional_goal ? ' · ' + plan.emotional_goal : ''}</span>
+                  <span className="text-text-placeholder shrink-0 text-[10px]">{showFuncBar ? '▲' : '▼'}</span>
+                </button>
+                {showFuncBar && (
+                  <div className="px-3 pb-1.5 flex flex-wrap gap-x-3 border-t border-primary/10 pt-1.5">
+                    <span><span className="text-text-placeholder">功能：</span>{plan.function || '—'}</span>
+                    {plan.emotional_goal && <span><span className="text-text-placeholder">情绪：</span>{plan.emotional_goal}</span>}
+                    <span className="truncate"><span className="text-text-placeholder">概要：</span>{plan.summary}</span>
+                  </div>
+                )}
               </div>
             </div>
           )
@@ -1569,10 +1587,14 @@ export default function Workspace() {
       />
 
       {/* ===== 右栏：工具面板 ===== */}
-      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: rightWidth }}>
+      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: rightCollapsed ? 36 : rightWidth }}>
         {/* Tab 切换 */}
-        <div className="flex border-b border-border shrink-0">
-          {(['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
+        <div className="flex border-b border-border shrink-0 items-center">
+          <button onClick={() => setRightCollapsed(!rightCollapsed)}
+            className="text-xs text-text-placeholder hover:text-text-main shrink-0 w-6 h-6 flex items-center justify-center"
+            title={rightCollapsed ? '展开面板' : '折叠面板'}
+          >{rightCollapsed ? '◀' : '▶'}</button>
+          {!rightCollapsed && (['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
               className={`flex-1 py-1.5 text-[11px] font-medium transition-colors text-center
@@ -1584,7 +1606,7 @@ export default function Workspace() {
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto">
+        {!rightCollapsed && <div className="flex-1 overflow-auto">
           {/* 大纲 Tab */}
           {rightTab === 'outline' && (
             <div className="p-3">
@@ -1947,6 +1969,7 @@ export default function Workspace() {
             </div>
           )}
         </div>
+        }
       </aside>
 
       {/* 生成配置弹窗 */}
