@@ -173,13 +173,13 @@ export default function SettingDetail() {
         )}
       </div>
 
-      {/* 类别标签 */}
+      {/* 类别标签 — 单行 flex-1 挤压不换行 */}
       <div className="flex border-b border-border mb-4">
         {CATS.map(c => (
           <button key={c.key} onClick={() => { setCat(c.key); setShowAddForm(false) }}
-            className={`flex items-center gap-1 px-4 py-2 text-sm transition-colors
+            className={`flex-1 flex items-center justify-center gap-1 py-2 text-sm transition-colors
               ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
-          >{c.icon} {c.label} <span className="text-text-placeholder">({data[c.key]?.length || 0})</span></button>
+          >{c.label} <span className="text-text-placeholder">({data[c.key]?.length || 0})</span></button>
         ))}
       </div>
 
