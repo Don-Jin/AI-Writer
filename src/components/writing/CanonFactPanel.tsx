@@ -286,13 +286,11 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       {/* 头部 */}
       {/* 类别标签 — 单行 flex-1，和主标签一样挤压不换行 */}
       <div className="flex items-center border-b border-border shrink-0">
-        {CATS.map(c => {
-          const count = facts.filter(f => f.fact_category === c.key).length
-          return (
+        {CATS.map(c => { return (
             <button key={c.key} onClick={() => setCat(c.key)}
               className={`flex-1 py-1.5 text-[11px] text-center transition-colors
                 ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
-            >{c.label}({count})</button>
+            >{c.label}</button>
           )
         })}
         <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
