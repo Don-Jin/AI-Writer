@@ -547,8 +547,9 @@ export default function Workspace() {
             const arr = JSON.parse(jm[0])
             await window.electronAPI!.db.run('DELETE FROM canon_facts WHERE project_id = ? AND source = ?', [Number(id), '大纲'])
             for (const f of arr) {
+              const rl = f.fact_category === 'character' ? 50 : f.fact_category === 'event' ? 60 : f.fact_category === 'relationship' ? 40 : 30
               await window.electronAPI!.db.run(
-                `INSERT INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter) VALUES (?,?,?,?,?,?,0)`,
+                `INSERT INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter,revealed_level) VALUES (?,?,?,?,?,?,0,${rl})`,
                 [Number(id), f.fact_category, f.fact_key, f.fact_value, f.is_hard_rule ? 1 : 0, '大纲']
               )
             }
@@ -668,12 +669,34 @@ export default function Workspace() {
       ], '卷纲生成')
       if (cancelledRef.current) return
 
-      const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-      const jm = clean.match(/\{[\s\S]*\}/)
-      if (!jm) { showToast('error', '卷纲格式异常，请重试'); return }
+      // 去掉 markdown 代码块标记
+      let text = reply
+        .replace(/```json\s*/gi, '')
+        .replace(/```\s*/g, '')
+        .replace(/^[\s\n]*json[\s\n]*/i, '')
+        .trim()
+      // 从第一个 { 到最后一个 } 提取
+      const firstBrace = text.indexOf('{')
+      const lastBrace = text.lastIndexOf('}')
+      let jsonStr = ''
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        jsonStr = text.slice(firstBrace, lastBrace + 1)
+      } else {
+        // 尝试数组
+        const firstBracket = text.indexOf('[')
+        const lastBracket = text.lastIndexOf(']')
+        if (firstBracket >= 0 && lastBracket > firstBracket) {
+          jsonStr = text.slice(firstBracket, lastBracket + 1)
+        }
+      }
+      if (!jsonStr) {
+        console.error('VOLUME PARSE FAILED. Text length:', reply.length, 'Preview:', reply.slice(0, 300))
+        showToast('error', `卷纲格式异常（返回${reply.length}字符，无JSON）。请重试。`)
+        return
+      }
       let vol: any
-      try { vol = JSON.parse(jm[0]) } catch {
-        try { vol = JSON.parse(jm[0].replace(/,\s*}/g, '}').replace(/[\x00-\x1f]/g, ' ')) } catch {}
+      try { vol = JSON.parse(jsonStr) } catch {
+        try { vol = JSON.parse(jsonStr.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']').replace(/[\x00-\x1f]/g, ' ')) } catch {}
       }
       if (!vol) { showToast('error', '卷纲格式异常，请重试'); return }
       const newVol: Volume = {
@@ -708,6 +731,31 @@ export default function Workspace() {
       }
       const newVols = [...volumes, newVol]
       await saveVolumes(newVols)
+
+      // 后台自动提取卷纲中的新设定到 canon_facts
+      ;(async () => {
+        try {
+          const volText = JSON.stringify(newVol)
+          const fm = [
+            { role: 'system' as const, content: '从卷纲JSON中提取所有角色名和世界观设定名。只输出JSON数组：[{"fact_key":"名称","fact_category":"character|setting","fact_value":"描述"}]。不要任何其他文字。' },
+            { role: 'user' as const, content: volText },
+          ]
+          const cr = await window.electronAPI!.aiChat(fm, '卷纲事实提取')
+          const jm2 = cr.match(/\[[\s\S]*\]/)
+          if (jm2) {
+            const arr = JSON.parse(jm2[0])
+            for (const f of arr) {
+              if (!f.fact_key) continue
+              const cat = f.fact_category || 'character'
+              const rl = cat === 'character' ? 50 : 30
+              await window.electronAPI!.db.run(
+                `INSERT OR IGNORE INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter,revealed_level) VALUES (?,?,?,?,?,?,0,${rl})`,
+                [Number(id), cat, f.fact_key, (f.fact_value || '').slice(0, 200), 0, '卷纲生成']
+              )
+            }
+          }
+        } catch { /* non-blocking */ }
+      })()
 
       // 将卷纲规划的伏笔写入 foreshadowing_registry
       if (vol.foreshadowing_plant && vol.foreshadowing_plant.length > 0) {
@@ -1358,6 +1406,18 @@ export default function Workspace() {
                 const tvDelta = modeTvDelta(narrativeMode)
                 d.truth_value = Math.min(maxTv, Math.max(0.1, oldTv + tvDelta))
                 d.stability = Math.min(1.0, (d.stability || 0.5) + 0.1)
+                // v2.5: 公开度随 truth_value 联动——被确认的事实自动公开
+                const newTv = d.truth_value
+                const currentRl = existing.revealed_level || 0
+                // tv 映射到 rl：tv=0.3→rl≈20, tv=0.6→rl≈50, tv=0.9→rl≈90
+                const targetRl = Math.round(newTv * 100)
+                const newRl = Math.max(currentRl, Math.min(100, Math.round((currentRl + targetRl) / 2)))
+                // 仅当目标更高时才更新
+                if (newRl > currentRl) {
+                  await window.electronAPI!.db.run(
+                    `UPDATE canon_facts SET revealed_level = ? WHERE id = ?`, [newRl, existing.id]
+                  )
+                }
                 d.conflict_weight = Math.max(0, (d.conflict_weight || 0) - 0.05)
                 await window.electronAPI!.db.run(
                   `UPDATE canon_facts SET details = ?, updated_at = datetime('now','localtime') WHERE id = ?`,

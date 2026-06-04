@@ -121,8 +121,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       for (const item of arr) {
         const details = item.details || {}
         await window.electronAPI.db.run(
-          `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details)
-           VALUES (?, ?, ?, ?, 1, 'AI生成', ?)`,
+          `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, revealed_level)
+           VALUES (?, ?, ?, ?, 1, 'AI生成', ?, ${cat === 'character' ? 50 : cat === 'event' ? 60 : cat === 'relationship' ? 40 : 30})`,
           [projectId, cat, item.fact_key, item.fact_value || '', JSON.stringify(details)]
         )
       }
@@ -176,8 +176,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
           )
         } else {
           await window.electronAPI.db.run(
-            `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter)
-             VALUES (?, ?, ?, ?, 1, '章节提取', ?, ?)`,
+            `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter, revealed_level)
+             VALUES (?, ?, ?, ?, 1, '章节提取', ?, ?, ${cat === 'character' ? 50 : cat === 'event' ? 60 : cat === 'relationship' ? 40 : 30})`,
             [projectId, cat, item.fact_key, item.fact_value || '', JSON.stringify(item.details || {}), num]
           )
           added++
@@ -220,8 +220,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       const obj = JSON.parse(jm[0])
 
       await window.electronAPI.db.run(
-        `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details)
-         VALUES (?, ?, ?, ?, 1, 'AI补全', ?)`,
+        `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, revealed_level)
+         VALUES (?, ?, ?, ?, 1, 'AI补全', ?, ${cat === 'character' ? 50 : cat === 'event' ? 60 : cat === 'relationship' ? 40 : 30})`,
         [projectId, cat, name.trim(), obj.fact_value || '', JSON.stringify(obj.details || {})]
       )
       showToast('success', `已添加「${name.trim()}」`)
@@ -236,8 +236,8 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   const addFact = async () => {
     if (!newKey.trim()) { showToast('error', '请输入名称'); return }
     await window.electronAPI?.db.run(
-      `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details)
-       VALUES (?, ?, ?, ?, ?, '手动添加', ?)`,
+      `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, revealed_level)
+       VALUES (?, ?, ?, ?, ?, '手动添加', ?, ${cat === 'character' ? 50 : cat === 'event' ? 60 : cat === 'relationship' ? 40 : 30})`,
       [projectId, cat, newKey.trim(), newValue.trim(), newHard ? 1 : 0, newDetails || '{}']
     )
     setShowAdd(false); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true)
@@ -325,9 +325,10 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
             ? [item.info, item.abilities, item.role].filter(Boolean).join('；')
             : (item.description || '')
           const details = JSON.stringify(item)
+          const defaultReveal = catMap[type] === 'character' ? 50 : catMap[type] === 'setting' ? 30 : 20
           await window.electronAPI!.db.run(
             `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, source, is_hard_rule, revealed_level, confidence, source_type, details)
-             VALUES (?,?,?,?,'setting_library',0,0,'medium','imported_user',?)`,
+             VALUES (?,?,?,?,'setting_library',0,${defaultReveal},'medium','imported_user',?)`,
             [projectId, catMap[type], factKey, factValue.slice(0, 200), details]
           )
           count++
@@ -362,9 +363,10 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
       const arr = JSON.parse(jm[0])
       await window.electronAPI.db.run('DELETE FROM canon_facts WHERE project_id = ? AND source = ?', [projectId, '大纲'])
       for (const f of arr) {
+        const rl = f.fact_category === 'character' ? 50 : f.fact_category === 'event' ? 60 : f.fact_category === 'relationship' ? 40 : 30
         await window.electronAPI.db.run(
-          `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter)
-           VALUES (?, ?, ?, ?, ?, '大纲', '{}', 0)`,
+          `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details, established_chapter, revealed_level)
+           VALUES (?, ?, ?, ?, ?, '大纲', '{}', 0, ${rl})`,
           [projectId, f.fact_category, f.fact_key, f.fact_value, f.is_hard_rule ? 1 : 0]
         )
       }
@@ -555,6 +557,14 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
                       <textarea value={f.fact_value} onChange={e => updateFact(f.id, 'fact_value', e.target.value)}
                         rows={2}
                         className="w-full text-xs border border-border-input rounded px-2 py-1 resize-none focus:outline-none focus:border-primary" />
+                      <div className="flex items-center gap-2">
+                        <span className="text-xxs text-text-placeholder shrink-0">公开度</span>
+                        <input type="range" min={0} max={100} step={10}
+                          value={f.revealed_level || 0}
+                          onChange={e => updateFact(f.id, 'revealed_level', e.target.value)}
+                          className="flex-1 h-1 accent-primary" />
+                        <span className="text-xxs w-8 text-right">{f.revealed_level || 0}%</span>
+                      </div>
                       <div className="flex gap-1">
                         <button onClick={() => updateFact(f.id, 'details', JSON.stringify(details))}
                           className="text-xs px-2 py-0.5 border border-border-input rounded hover:bg-bg-secondary">保存</button>
