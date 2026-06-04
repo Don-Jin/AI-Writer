@@ -6,6 +6,7 @@ export default {
   ],
   theme: {
     extend: {
+      // ========== 颜色（三级区域 + 语义状态色） ==========
       colors: {
         primary: {
           DEFAULT: '#6366F1',
@@ -13,9 +14,10 @@ export default {
           light: '#EEF2FF',
         },
         bg: {
-          main: '#F8FAFC',
-          secondary: '#F1F5F9',
-          sidebar: '#EBEDF3',
+          main: '#F8FAFC',      // 页面底色（左菜单/右面板）
+          secondary: '#F1F5F9', // 辅助区底色
+          sidebar: '#EBEDF3',   // 左菜单底色（最暗）
+          surface: '#FFFFFF',   // 卡片/编辑器白底（仅中央区用）
         },
         text: {
           main: '#1E293B',
@@ -30,30 +32,47 @@ export default {
         warning: '#F59E0B',
         danger: '#EF4444',
       },
+      // ========== 字号（6级语义化） ==========
+      // 区域规则：
+      //   左菜单 = text-sm (13px)
+      //   右面板 = text-xs (12px), 徽章 text-xxs (10px)
+      //   中央编辑器 = text-base (15px)
+      //   对话框/表单 = text-sm (13px)
+      fontSize: {
+        'xxs':  ['10px', { lineHeight: '14px' }],           // 徽章/极小标签
+        'xs':   ['12px', { lineHeight: '18px' }],            // 正文辅助/列表项
+        'sm':   ['13px', { lineHeight: '20px' }],            // 说明文字/提示
+        'base': ['15px', { lineHeight: '1.75', fontWeight: '400' }], // 正文阅读
+        'lg':   ['18px', { lineHeight: '28px', fontWeight: '500' }], // 区块标题
+        'xl':   ['28px', { lineHeight: '36px', fontWeight: '600', letterSpacing: '-0.02em' }], // 页面标题
+      },
+      // ========== 间距（4pt 网格） ==========
+      // 值: 4/8/12/16/20/24/32 = tailwind scale 1/2/3/4/5/6/8
+      // 右面板 = gap-1.5(6px, 紧凑)
+      // 编辑器 = gap-4(16px, 舒适)
+      // 左菜单 = gap-3(12px, 宽松)
+      spacing: {
+        'sidebar': '140px',
+        'sidebar-collapsed': '48px',
+      },
+      // ========== 圆角（3档） ==========
+      borderRadius: {
+        'sm': '6px',    // 输入框/小控件
+        'card': '12px',  // 卡片
+        'btn': '10px',   // 按钮/标签
+      },
+      // ========== 阴影（2档） ==========
+      boxShadow: {
+        'card': '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)',
+        'glow': '0 0 0 3px rgba(99,102,241,0.12)',
+      },
+      // ========== 字体 ==========
       fontFamily: {
         sans: ['Inter', 'Microsoft YaHei', 'PingFang SC', 'system-ui', 'sans-serif'],
       },
-      fontSize: {
-        'page-title': ['28px', { fontWeight: '600', letterSpacing: '-0.02em' }],
-        'section-title': ['16px', { fontWeight: '500' }],
-        'body': ['15px', { fontWeight: '400', lineHeight: '1.75' }],
-        'caption': ['13px', { fontWeight: '400' }],
-      },
-      spacing: {
-        'sidebar': '220px',
-      },
-      borderRadius: {
-        'card': '12px',
-        'btn': '10px',
-      },
-      boxShadow: {
-        'card': '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)',
-        'card-hover': '0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.04)',
-        'panel': '0 0 0 1px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.04)',
-        'glow': '0 0 0 3px rgba(99,102,241,0.12)',
-      },
+      // ========== 动效 ==========
       transitionDuration: {
-        '200': '200ms',
+        'DEFAULT': '150ms',
       },
     },
   },

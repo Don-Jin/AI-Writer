@@ -175,7 +175,7 @@ export default function LibraryList() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-page-title text-text-main">风格库</h1>
+        <h1 className="text-xl text-text-main">风格库</h1>
         <button
           onClick={() => setModalOpen(true)}
           className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors"
@@ -188,8 +188,8 @@ export default function LibraryList() {
       {libraries.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-text-secondary">
           <span className="text-5xl mb-4">📚</span>
-          <p className="text-body mb-2">还没有风格库</p>
-          <p className="text-caption">导入一本小说，让 AI 学习它的写作风格</p>
+          <p className="text-base mb-2">还没有风格库</p>
+          <p className="text-sm">导入一本小说，让 AI 学习它的写作风格</p>
         </div>
       ) : (
         <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
@@ -234,21 +234,21 @@ export default function LibraryList() {
         {importing ? (
           <div className="flex flex-col items-center py-8 gap-3">
             <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            <p className="text-body text-text-main">{importProgress}</p>
-            <p className="text-caption text-text-secondary">正在调用 AI 进行分析，请耐心等待...</p>
+            <p className="text-base text-text-main">{importProgress}</p>
+            <p className="text-sm text-text-secondary">正在调用 AI 进行分析，请耐心等待...</p>
           </div>
         ) : (
           <div className="flex flex-col gap-4">
             {/* 名称 */}
             <div>
-              <label className="block text-body text-text-main mb-2">风格库名称 *</label>
+              <label className="block text-base text-text-main mb-2">风格库名称 *</label>
               <input
                 type="text"
                 value={libraryName}
                 onChange={(e) => setLibraryName(e.target.value)}
                 placeholder="例如：三体风格、金庸武侠风"
                 autoFocus
-                className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+                className="w-full h-10 px-3 border border-border-input rounded-btn text-base
                            focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                            placeholder:text-text-placeholder"
               />
@@ -256,18 +256,18 @@ export default function LibraryList() {
 
             {/* 导入方式 */}
             <div>
-              <label className="block text-body text-text-main mb-2">导入方式</label>
+              <label className="block text-base text-text-main mb-2">导入方式</label>
               <div className="flex gap-2">
                 <button
                   onClick={() => setMode('file')}
-                  className={`px-4 py-2 rounded-btn text-body transition-colors
+                  className={`px-4 py-2 rounded-btn text-base transition-colors
                     ${mode === 'file' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
                 >
                   📁 上传文件
                 </button>
                 <button
                   onClick={() => setMode('paste')}
-                  className={`px-4 py-2 rounded-btn text-body transition-colors
+                  className={`px-4 py-2 rounded-btn text-base transition-colors
                     ${mode === 'paste' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
                 >
                   📋 粘贴文本
@@ -283,11 +283,11 @@ export default function LibraryList() {
               >
                 <span className="text-3xl mb-2 block">📂</span>
                 {fileName ? (
-                  <p className="text-body text-text-main">{fileName}</p>
+                  <p className="text-base text-text-main">{fileName}</p>
                 ) : (
                   <>
-                    <p className="text-body text-text-secondary mb-1">点击选择文件</p>
-                    <p className="text-caption text-text-placeholder">支持 TXT、Word、Markdown 格式</p>
+                    <p className="text-base text-text-secondary mb-1">点击选择文件</p>
+                    <p className="text-sm text-text-placeholder">支持 TXT、Word、Markdown 格式</p>
                   </>
                 )}
               </div>
@@ -299,7 +299,7 @@ export default function LibraryList() {
                 onChange={(e) => setPastedText(e.target.value)}
                 placeholder="将小说文本粘贴到此处（建议至少 3000 字以获得准确的风格分析）"
                 rows={10}
-                className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none
+                className="w-full px-3 py-2 border border-border-input rounded-btn text-base resize-none
                            focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                            placeholder:text-text-placeholder"
               />
@@ -325,7 +325,7 @@ function LibraryCard({ library, onDelete }: { library: StyleLibrary; onDelete: (
       className="bg-white rounded-card border border-border p-5 hover:shadow-md hover:border-primary/30 transition-all group cursor-pointer relative"
     >
       <div className="flex items-start justify-between mb-3">
-        <h3 className="text-section-title text-text-main">
+        <h3 className="text-lg text-text-main">
           <InlineEdit
             value={library.name}
             onSave={async (newName) => {
@@ -342,11 +342,11 @@ function LibraryCard({ library, onDelete }: { library: StyleLibrary; onDelete: (
       </div>
 
       <div className="space-y-1.5 mb-3">
-        <div className="flex items-center gap-2 text-caption">
+        <div className="flex items-center gap-2 text-sm">
           <span className="text-text-placeholder">源小说：</span>
           <span className="text-text-secondary">{library.source_novel_title || '未记录'}</span>
         </div>
-        <div className="flex items-center gap-2 text-caption">
+        <div className="flex items-center gap-2 text-sm">
           <span className="text-text-placeholder">氛围：</span>
           <span className="px-1.5 py-0.5 rounded bg-primary-light text-primary text-xs">
             {primary}
@@ -358,13 +358,13 @@ function LibraryCard({ library, onDelete }: { library: StyleLibrary; onDelete: (
           )}
         </div>
         {perspective && (
-          <div className="text-caption text-text-secondary truncate" title={perspective}>
+          <div className="text-sm text-text-secondary truncate" title={perspective}>
             {perspective}
           </div>
         )}
       </div>
 
-      <div className="text-caption text-text-placeholder">
+      <div className="text-sm text-text-placeholder">
         {library.created_at?.slice(0, 10)}
       </div>
     </div>

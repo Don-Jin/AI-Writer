@@ -174,8 +174,8 @@ export default function PersonalityDetail() {
 
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-page-title text-text-main">{project.name}</h1>
-          <p className="text-caption text-text-secondary mt-1">
+          <h1 className="text-xl text-text-main">{project.name}</h1>
+          <p className="text-sm text-text-secondary mt-1">
             源文本 {(project.source_text || '').length.toLocaleString()} 字
           </p>
         </div>

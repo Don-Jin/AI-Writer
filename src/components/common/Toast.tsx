@@ -71,7 +71,7 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
   return (
     <div
       onClick={onClose}
-      className={`px-4 py-2.5 rounded-btn text-white text-body shadow-lg cursor-pointer
+      className={`px-4 py-2.5 rounded-btn text-white text-base shadow-lg cursor-pointer
         transition-all duration-300 ${colorMap[toast.type]}
         ${visible ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'}`}
     >

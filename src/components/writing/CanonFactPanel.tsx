@@ -20,13 +20,21 @@ interface Props {
 export default function CanonFactPanel({ projectId, outlineContent, chapters }: Props) {
   const [facts, setFacts] = useState<CanonFact[]>([])
   const [loading, setLoading] = useState(true)
-  const [cat, setCat] = useState<FactCategory>('character')
+  const [cat, setCat] = useState<FactCategory | 'conflict'>('character')
+  const [conflicts, setConflicts] = useState<any[]>([])
   const [extracting, setExtracting] = useState(false)
   const [genLoading, setGenLoading] = useState('')
   const [showChapterInput, setShowChapterInput] = useState(false)
   const [chapterInputVal, setChapterInputVal] = useState('')
   const [showAiFillInput, setShowAiFillInput] = useState(false)
   const [aiFillInputVal, setAiFillInputVal] = useState('')
+  // P3: 从设定库导入
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importLibs, setImportLibs] = useState<any[]>([])
+  const [importSelectedLibId, setImportSelectedLibId] = useState<number | ''>('')
+  const [importSelections, setImportSelections] = useState<Record<string, boolean>>({})
+  const [importRunning, setImportRunning] = useState(false)
   const cancelledRef = useRef(false)
   const loadingRef = useRef(false)
 
@@ -73,7 +81,15 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
 
   useEffect(() => { loadFacts() }, [loadFacts])
 
-  const filtered = facts.filter(f => f.fact_category === cat)
+  const [revealFilter, setRevealFilter] = useState<'all' | 'hidden' | 'partial' | 'done'>('all')
+
+  const filtered = facts.filter(f => {
+    if (f.fact_category !== cat) return false
+    if (revealFilter === 'hidden') return (f.revealed_level || 0) === 0
+    if (revealFilter === 'partial') return (f.revealed_level || 0) > 0 && (f.revealed_level || 0) < 100
+    if (revealFilter === 'done') return (f.revealed_level || 0) >= 100
+    return true
+  })
 
   // ========== AI 从大纲生成角色/设定 ==========
   const handleGenFromOutline = async () => {
@@ -195,7 +211,7 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
 
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: '只输出JSON对象，不要任何其他文字。' },
-        { role: 'user', content: `${prompt}\n\n大纲：\n${outlineContent.slice(0, 4000)}` },
+        { role: 'user', content: `${prompt}\n\n大纲：\n${(outlineContent || '').slice(0, 4000)}` },
       ], 'AI补全设定')
       if (cancelledRef.current) return
       const clean = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
@@ -249,6 +265,87 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
     loadFacts()
   }
 
+  const loadConflicts = useCallback(async () => {
+    try {
+      const rows = await window.electronAPI!.db.query(
+        "SELECT * FROM conflict_facts WHERE project_id = ? ORDER BY created_at DESC",
+        [projectId]
+      )
+      setConflicts(rows || [])
+    } catch { setConflicts([]) }
+  }, [projectId])
+
+  useEffect(() => {
+    if (cat === 'conflict') loadConflicts()
+    else loadFacts()
+  }, [cat])
+
+  // P3: 从设定库导入
+  const openImportModal = async () => {
+    setShowImportModal(true)
+    setImportSelections({})
+    setImportSelectedLibId('')
+    try {
+      const libs = await window.electronAPI!.db.query(
+        "SELECT id, name, setting_data FROM setting_libraries WHERE setting_data IS NOT NULL AND setting_data != '' AND setting_data != '{}'"
+      )
+      setImportLibs(libs)
+    } catch { setImportLibs([]) }
+  }
+  const toggleSelectAll = (select: boolean) => {
+    const lib = importLibs.find((l: any) => l.id === importSelectedLibId)
+    if (!lib) return
+    let data: any = {}
+    try { data = JSON.parse(lib.setting_data || '{}') } catch { return }
+    const sel: Record<string, boolean> = {}
+    for (const type of ['characters', 'worlds', 'rules']) {
+      for (const item of (data[type] || [])) {
+        const k = `${type}:${item.name}`
+        sel[k] = select
+      }
+    }
+    setImportSelections(sel)
+  }
+  const doImport = async () => {
+    const lib = importLibs.find((l: any) => l.id === importSelectedLibId)
+    if (!lib) { showToast('error', '请选择设定库'); return }
+    let data: any = {}
+    try { data = JSON.parse(lib.setting_data || '{}') } catch { showToast('error', '设定库数据解析失败'); return }
+    setImportRunning(true)
+    let count = 0
+    try {
+      for (const [type, items] of Object.entries(data) as [string, any[]][]) {
+        if (!['characters', 'worlds', 'rules'].includes(type)) continue
+        const catMap: Record<string, string> = { characters: 'character', worlds: 'setting', rules: 'rule' }
+        for (const item of items) {
+          const k = `${type}:${item.name}`
+          if (!importSelections[k]) continue
+          const factKey = item.name
+          const factValue = type === 'characters'
+            ? [item.info, item.abilities, item.role].filter(Boolean).join('；')
+            : (item.description || '')
+          const details = JSON.stringify(item)
+          await window.electronAPI!.db.run(
+            `INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, source, is_hard_rule, revealed_level, confidence, source_type, details)
+             VALUES (?,?,?,?,'setting_library',0,0,'medium','imported_user',?)`,
+            [projectId, catMap[type], factKey, factValue.slice(0, 200), details]
+          )
+          count++
+        }
+      }
+      showToast('success', `已导入 ${count} 条。新约束将从下一章正文开始生效。已生成的大纲和卷纲不受影响。`)
+      setShowImportModal(false)
+      loadFacts()
+    } catch (e: any) { showToast('error', '导入失败：' + (e.message || '未知')) }
+    finally { setImportRunning(false) }
+  }
+
+  // Source type color
+  function sourceColor(st: string) {
+    const m: Record<string, string> = { system_core: 'border-red-400', imported_user: 'border-blue-400', auto_extracted: 'border-gray-300' }
+    return m[st] || 'border-gray-300'
+  }
+
   // ========== 批量生成全部类别 ==========
   const handleExtractAll = async () => {
     if (!outlineContent || !window.electronAPI) { showToast('error', '请先生成大纲'); return }
@@ -282,37 +379,54 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
   const hardCount = facts.filter(f => f.is_hard_rule).length
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col">
       {/* 头部 */}
-      {/* 类别标签 — 单行 flex-1，和主标签一样挤压不换行 */}
-      <div className="flex items-center border-b border-border shrink-0">
-        {CATS.map(c => { return (
-            <button key={c.key} onClick={() => setCat(c.key)}
-              className={`flex-1 py-1.5 text-[11px] text-center transition-colors
-                ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
-            >{c.label}</button>
-          )
-        })}
-        <button onClick={handleExtractAll} disabled={extracting || !outlineContent}
-          className="flex-1 py-1.5 text-[11px] text-center text-text-secondary hover:text-primary disabled:opacity-50"
-          title="批量提取所有设定">批量提取</button>
+      {/* 类别标签 — 可横滚，不挤压 */}
+      <div className="flex items-center border-b border-border shrink-0 overflow-x-auto">
+        {CATS.map(c => (
+          <button key={c.key} onClick={() => setCat(c.key)}
+            className={`flex-none px-2 py-1 text-xs whitespace-nowrap transition-colors
+              ${cat === c.key ? 'text-primary border-b-2 border-primary font-semibold' : 'text-text-secondary hover:text-text-main'}`}
+          >{c.label}</button>
+        ))}
+        <button onClick={() => setCat('conflict')}
+          className={`flex-none px-2 py-1 text-xs whitespace-nowrap transition-colors
+            ${cat === 'conflict' ? 'text-primary border-b-2 border-primary font-semibold' : 'text-text-secondary hover:text-text-main'}`}
+        >⚡冲突</button>
       </div>
-
-      {/* 操作栏 — 4 按钮单行 flex-1，挤压不换行 */}
-      <div className="flex items-center border-b border-border shrink-0">
-        <button onClick={handleGenFromOutline} disabled={!!genLoading || !outlineContent}
-          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '⏳' : '大纲生成'}</button>
-        <button onClick={startChapterExtract} disabled={!!extracting}
-          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
-        >{extracting ? '⏳' : '章节提取'}</button>
-        <button onClick={startAiFill} disabled={!!genLoading}
-          className="flex-1 py-1.5 text-[11px] text-center border-r border-border text-text-secondary hover:bg-bg-secondary disabled:opacity-50"
-        >{genLoading === cat ? '⏳' : 'AI补全'}</button>
-        <button onClick={() => { setShowAdd(!showAdd); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true) }}
-          className="flex-1 py-1.5 text-[11px] text-center text-primary hover:bg-primary/5">+ 手动添加</button>
+      {/* 公开度筛选 + 操作 */}
+      <div className="flex items-center gap-1 px-1 py-0.5 border-b border-border shrink-0">
+        {(['all','hidden','partial','done'] as const).map(f => (
+          <button key={f} onClick={() => setRevealFilter(f)}
+            className={`flex-1 py-0.5 text-xxs rounded transition-colors ${revealFilter === f ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-secondary'}`}>
+            {{all:'全部',hidden:'未公开',partial:'部分公开',done:'已公开'}[f]}
+          </button>
+        ))}
+        <div className="relative flex-none ml-1">
+          <button onClick={() => setShowAddMenu(!showAddMenu)}
+            className="px-1.5 py-0.5 text-xxs text-primary hover:bg-primary/5 rounded border border-primary/30">＋</button>
+          {showAddMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
+              <div className="absolute right-0 top-full mt-0.5 z-50 bg-white rounded-card shadow-lg border border-border py-1 min-w-[130px]">
+                <button onClick={() => { setShowAddMenu(false); handleExtractAll() }} disabled={extracting || !outlineContent}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary disabled:opacity-30">📋 从大纲生成</button>
+                <button onClick={() => { setShowAddMenu(false); startChapterExtract() }} disabled={!!extracting}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary disabled:opacity-30">📖 从章节提取</button>
+                <button onClick={() => { setShowAddMenu(false); startAiFill() }} disabled={!!genLoading}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary disabled:opacity-30">🤖 AI补全</button>
+                <div className="border-t border-border my-0.5" />
+                <button onClick={() => { setShowAddMenu(false); openImportModal() }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary">📥 从设定库导入</button>
+                <div className="border-t border-border my-0.5" />
+                <button onClick={() => { setShowAddMenu(false); setShowAdd(true); setNewKey(''); setNewValue(''); setNewDetails(''); setNewHard(true) }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary">✏️ 手动输入</button>
+              </div>
+            </>
+          )}
+        </div>
         {(genLoading || extracting) && (
-          <button onClick={handleCancel} className="flex-1 py-1.5 text-[11px] text-center text-danger hover:bg-danger/10">⏹ 取消</button>
+          <button onClick={handleCancel} className="flex-none px-1.5 py-0.5 text-xxs text-danger hover:bg-danger/10 rounded">⏹</button>
         )}
       </div>
 
@@ -360,7 +474,33 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
         </div>
       )}
 
-      {/* 列表 */}
+      {/* 冲突列表 */}
+      {cat === 'conflict' && (
+        <div className="flex-1 overflow-auto">
+          {conflicts.length === 0 ? (
+            <div className="text-center py-12 text-text-secondary text-sm">暂无冲突记录。当系统检测到事实矛盾时自动生成。</div>
+          ) : (
+            <div className="space-y-1.5 p-2">
+              {conflicts.map((c: any) => (
+                <div key={c.id} className={`bg-white rounded-card border p-2 ${c.resolution_status === 'permanent' ? 'border-purple-300 bg-purple-50/30' : 'border-orange-200'}`}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-xs font-medium text-text-main">{c.conflict_type === 'ambiguity' ? '🔀 模糊' : c.conflict_type === 'contradiction' ? '⚡ 矛盾' : '⚠ 不一致'}</span>
+                    <span className={`text-xxs px-1 rounded ${c.resolution_status === 'permanent' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>
+                      {c.resolution_status === 'permanent' ? '🔥 永久' : c.resolution_status === 'unresolved' ? '未解决' : c.resolution_status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-text-secondary">"{c.fact_a_text}"</p>
+                  <p className="text-xs text-text-secondary mt-0.5">vs "{c.fact_b_text}"</p>
+                  {c.detected_chapter && <p className="text-xxs text-text-placeholder mt-1">检测于第{c.detected_chapter}章</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 事实列表 */}
+      {cat !== 'conflict' && (
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="flex justify-center py-12"><div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
@@ -369,14 +509,14 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
             {facts.length === 0 ? '暂无设定，点击上方按钮生成或手动添加' : `暂无${CATS.find(c => c.key === cat)?.label}类别数据`}
           </div>
         ) : (
-          <div className="space-y-1 p-2">
+          <div className="space-y-1.5 p-2">
             {filtered.map(f => {
               let details: any = {}
               try { details = typeof f.details === 'string' ? JSON.parse(f.details || '{}') : (f.details || {}) } catch {}
               const isExpanded = expandedId === f.id
 
               return (
-                <div key={f.id} className="bg-white rounded-card shadow-card overflow-hidden hover-lift group">
+                <div key={f.id} className={`bg-white rounded-card shadow-card overflow-hidden hover-lift group border-l-2 ${sourceColor(f.source_type || '')}`}>
                   <div className="px-3 py-2 cursor-pointer"
                     onClick={() => setExpandedId(isExpanded ? null : f.id)}>
                     <div className="flex items-start gap-2">
@@ -384,19 +524,26 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 mb-0.5">
                           <span className="text-xs font-medium text-text-main">{f.fact_key}</span>
-                          {f.is_hard_rule
-                            ? <span className="text-[10px] px-1 rounded bg-red-100 text-red-700 font-medium">硬</span>
-                            : <span className="text-[10px] px-1 rounded bg-gray-100 text-gray-500">软</span>}
-                          <span className="text-[10px] text-text-placeholder">{f.source}</span>
+                          {/* truth_value mini bar */}
+                          {(() => {
+                            const tv = typeof details.truth_value === 'number' ? details.truth_value : (f.is_hard_rule ? 0.9 : 0.5)
+                            const pct = Math.round(tv * 100)
+                            const barColor = tv >= 0.8 ? 'bg-red-400' : tv >= 0.4 ? 'bg-yellow-400' : 'bg-gray-300'
+                            return <span className={`text-xxs px-1 rounded ${tv >= 0.8 ? 'bg-red-50 text-red-600' : tv >= 0.4 ? 'bg-yellow-50 text-yellow-600' : 'bg-gray-100 text-gray-500'}`} title={`truth_value: ${tv.toFixed(2)}`}>
+                              <span className={`inline-block w-1.5 h-1.5 rounded-full mr-0.5 ${barColor}`} />{pct}%
+                            </span>
+                          })()}
+                          {details.non_collapse && <span className="text-xxs text-purple-500" title="永不自动收敛">🟣</span>}
+                          <span className="text-xxs text-text-placeholder">{f.source}</span>
                         </div>
-                        <p className="text-xs text-text-secondary leading-relaxed">{f.fact_value}</p>
+                        <p className="text-xs text-text-secondary leading-relaxed line-clamp-2">{f.fact_value}</p>
                       </div>
                       <div className="flex gap-0.5 ml-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={(e) => { e.stopPropagation(); toggleHard(f) }}
-                          className="text-[10px] px-1 py-0.5 rounded hover:bg-bg-secondary text-text-placeholder hover:text-text-main"
+                          className="text-xxs px-1 py-0.5 rounded hover:bg-bg-secondary text-text-placeholder hover:text-text-main"
                           title={f.is_hard_rule ? '降为软设定' : '升为硬规则'}>{f.is_hard_rule ? '↓' : '↑'}</button>
                         <button onClick={(e) => { e.stopPropagation(); deleteFact(f.id) }}
-                          className="text-[10px] px-1 py-0.5 rounded hover:bg-red-50 text-text-placeholder hover:text-danger"
+                          className="text-xxs px-1 py-0.5 rounded hover:bg-red-50 text-text-placeholder hover:text-danger"
                           title="删除">✕</button>
                       </div>
                     </div>
@@ -422,6 +569,78 @@ export default function CanonFactPanel({ projectId, outlineContent, chapters }: 
           </div>
         )}
       </div>
+      )}
+
+      {/* P3: 从设定库导入弹窗 */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowImportModal(false)}>
+          <div className="bg-white rounded-card shadow-card p-4 w-[500px] max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-medium mb-3">📥 从设定库导入到事实簿</h3>
+            <p className="text-xs text-text-secondary mb-2">新约束将从下一章正文开始生效。已生成的大纲和卷纲不受影响。</p>
+
+            <label className="text-xs text-text-secondary">选择设定库</label>
+            <select value={importSelectedLibId} onChange={e => {
+              setImportSelectedLibId(e.target.value ? Number(e.target.value) : '')
+              setImportSelections({})
+            }} className="w-full text-xs border border-border-input rounded px-2 py-1.5 mb-2">
+              <option value="">— 选择设定库 —</option>
+              {importLibs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+
+            {importSelectedLibId && (() => {
+              const lib = importLibs.find((l: any) => l.id === importSelectedLibId)
+              if (!lib) return null
+              let data: any = {}
+              try { data = JSON.parse(lib.setting_data || '{}') } catch { return <p className="text-xs text-danger">数据解析失败</p> }
+              const allTypes = [
+                { key: 'characters', label: '👤 角色', items: data.characters || [] },
+                { key: 'worlds', label: '🌍 世界观', items: data.worlds || [] },
+                { key: 'rules', label: '📏 规则', items: data.rules || [] },
+              ].filter(t => t.items.length > 0)
+              if (!allTypes.length) return <p className="text-xs text-text-placeholder">该设定库无数据</p>
+              return (
+                <div>
+                  <div className="flex gap-2 mb-2">
+                    <button onClick={() => toggleSelectAll(true)} className="text-xxs text-primary hover:underline">全选</button>
+                    <button onClick={() => toggleSelectAll(false)} className="text-xxs text-text-placeholder hover:underline">全不选</button>
+                  </div>
+                  <div className="space-y-2 max-h-[40vh] overflow-auto">
+                    {allTypes.map(t => (
+                      <div key={t.key}>
+                        <p className="text-xs font-medium text-text-main mb-1">{t.label}</p>
+                        {t.items.map((item: any) => {
+                          const k = `${t.key}:${item.name}`
+                          const desc = t.key === 'characters'
+                            ? [item.info, item.abilities, item.role].filter(Boolean).join('；')
+                            : (item.description || '')
+                          return (
+                            <label key={k} className="flex items-start gap-1.5 py-0.5 cursor-pointer hover:bg-bg-secondary/50 rounded px-1">
+                              <input type="checkbox" checked={importSelections[k] !== false} onChange={e => setImportSelections(prev => ({ ...prev, [k]: e.target.checked }))}
+                                className="mt-0.5 shrink-0" />
+                              <div>
+                                <span className="text-xs text-text-main">{item.name}</span>
+                                {desc && <span className="text-xxs text-text-placeholder ml-1">— {(desc || '').slice(0, 60)}</span>}
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
+            <div className="flex justify-end gap-2 mt-3">
+              <button onClick={() => setShowImportModal(false)} className="px-3 py-1 text-xs border border-border-input text-text-secondary rounded-btn">取消</button>
+              <button onClick={doImport} disabled={!importSelectedLibId || importRunning}
+                className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
+                {importRunning ? '导入中...' : '导入选中'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

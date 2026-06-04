@@ -31,7 +31,7 @@ export default function Modal({ open, title, onClose, children, footer, width = 
       <div className={`bg-white rounded-card shadow-xl ${width} w-full mx-4`}>
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h2 className="text-section-title text-text-main">{title}</h2>
+          <h2 className="text-lg text-text-main">{title}</h2>
           <button
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-btn text-text-secondary hover:bg-bg-secondary transition-colors"

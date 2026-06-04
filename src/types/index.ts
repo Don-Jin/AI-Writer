@@ -62,11 +62,70 @@ export interface Outline {
 export interface ChapterPlan {
   chapter_number: number
   title: string
-  summary: string
-  characters: string[]
-  key_events: string[]
+  // 旧字段（向后兼容）
+  summary?: string
+  characters?: string[]
+  key_events?: string[]
+  function?: string
+  ending_type?: string
+  emotional_goal?: string
+  // 新字段
+  core_event?: string                    // 核心事件，一句话
+  plot_beats?: string[]                  // 情节点序列，8-15条
+  emotional_arc?: string                 // 情绪弧线：情绪A→情绪B→情绪C
+  opening_hook?: { type: string; detail: string }  // 章首钩子
+  closing_hook?: { type: string; impact: string }  // 章尾钩子 + 期待度
+  // 约束字段
+  forbidden?: string[]      // 本章禁止出现的剧情内容（3-5条）
+  scene_count?: number      // 场景数（2-4个）
+  max_info_reveal?: string  // 本章允许揭示的最大信息量（旧格式，向后兼容）
+  emotion_cap?: string      // 感情线上限（旧格式）
+  allowed_reveal?: { world: number; plot: number; character: number }  // 数值化信息配额
   estimated_words: number
-  status: 'pending' | 'generating' | 'generated' | 'edited'
+  status?: string
+  volume_version?: number          // 基于哪个卷纲版本生成
+  plan_version?: number            // 自身编辑版本
+}
+
+// ========== 卷纲 ==========
+export interface VolumeNode {
+  name: string                    // 节点名：开篇/发展/转折一/转折二/高潮/矛盾结果/转折三/结局
+  chapter_segment: string         // 章段，如"第001-006章"
+  task: string                    // 核心任务
+  pacing: string                  // 节奏：快/中/慢/极快
+  content: string                 // 具体内容
+  disasm_ref?: string             // 拆文借鉴
+  setting_ref?: string            // 设定库角色参考
+}
+
+export interface Volume {
+  volume_number: number; title: string; summary: string
+  chapter_range: [number, number]; theme: string
+  key_events: string[]
+  detailed_summary?: string
+  character_arcs?: string
+  key_events_str?: string
+  emotional_curve?: string
+  foreshadowing?: string
+  foreshadowing_planted?: string[]
+  foreshadowing_recovered?: string[]
+  word_count_target?: number
+  connection_prev?: string
+  connection_next?: string
+  pacing_design?: string
+  emotional_cadence?: string
+  foreshadowing_plant?: string[]
+  foreshadowing_payoff?: string[]
+  foreshadowing_advance?: string
+  character_milestones?: { character: string; start_state: string; end_state: string; key_event: string }[]
+  conflict_nodes?: { description: string; chapter_segment: string; escalation_type: string }[]
+  // 八节点结构
+  nodes?: VolumeNode[]
+  cool_density?: string            // 爽点密度描述
+  golden_five?: string             // 黄金五章对照
+  timeline_context?: { current_day: number; days_covered: number }
+  outline_version?: number         // 基于哪个大纲版本生成
+  version?: number                 // 卷自身编辑版本
 }
 
 export interface DetailedOutline {
@@ -146,7 +205,7 @@ export interface ChapterSummary {
 }
 
 // ========== 伏笔注册表 ==========
-export type ForeshadowingStatus = 'planned' | 'planted' | 'buried' | 'recycled' | 'resolved' | 'expired'
+export type ForeshadowingStatus = 'pending' | 'active' | 'done'
 export type ForeshadowingPriority = 'critical' | 'high' | 'normal' | 'low'
 
 export interface ForeshadowingItem {
@@ -180,6 +239,7 @@ export interface TimelineEvent {
   characters_involved: string[]
   event_type: TimelineEventType
   is_major: number
+  timeline_id: string       // 时间线标识（默认 'main'）
   created_at: string
 }
 
@@ -199,8 +259,26 @@ export interface CanonFact {
   source: string
   notes: string
   details: string  // JSON: 扩展信息（角色卡的性格/能力/关系，或世界设定的触发词/优先级等）
+  revealed_level: number  // 公开度 0-100（0=完全隐藏，100=完全公开）
+  dependencies: string    // JSON: 依赖的其他事实 { fact_key: string }[]
+  confidence: string      // 'low' | 'medium' | 'high' — 置信度
+  source_type: string     // 'system_core' | 'imported_user' | 'auto_extracted' — 来源权威层级
   created_at: string
   updated_at: string
+}
+
+// ========== 冲突记忆 ==========
+export interface ConflictFact {
+  id: number
+  project_id: number
+  fact_a_id: number | null
+  fact_b_id: number | null
+  fact_a_text: string
+  fact_b_text: string
+  conflict_type: 'contradiction' | 'inconsistency' | 'ambiguity'
+  resolution_status: 'unresolved' | 'resolved_a' | 'resolved_b' | 'merged' | 'accepted' | 'permanent'
+  detected_chapter: number | null
+  created_at: string
 }
 
 // ========== 设定库 ==========

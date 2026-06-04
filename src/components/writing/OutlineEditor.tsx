@@ -91,7 +91,7 @@ export default function OutlineEditor() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex items-center gap-2 text-caption text-text-secondary mb-4">
+      <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <button onClick={() => navigate('/')} className="hover:text-primary">首页</button>
         <span>/</span>
         <button onClick={() => navigate(`/project/${id}/prepare`)} className="hover:text-primary">{project.title}</button>
@@ -101,16 +101,16 @@ export default function OutlineEditor() {
 
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-page-title text-text-main">{project.title}</h1>
-          <p className="text-caption text-text-secondary mt-1">📋 故事大纲：情绪弧线 + 爽点分布 + 钩子设计</p>
+          <h1 className="text-xl text-text-main">{project.title}</h1>
+          <p className="text-sm text-text-secondary mt-1">📋 故事大纲：情绪弧线 + 爽点分布 + 钩子设计</p>
         </div>
         <div className="flex gap-2">
           <button onClick={handleSave} disabled={saving || !outlineContent.trim()}
-            className={`px-4 py-2 rounded-btn text-body transition-colors ${outlineContent.trim() ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
+            className={`px-4 py-2 rounded-btn text-base transition-colors ${outlineContent.trim() ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
             {saving ? '保存中...' : '💾 保存'}
           </button>
           <button onClick={() => { handleSave(); navigate(`/project/${id}/detail-outline`) }} disabled={!outlineContent.trim()}
-            className={`px-4 py-2 rounded-btn text-body transition-colors ${outlineContent.trim() ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}`}>
+            className={`px-4 py-2 rounded-btn text-base transition-colors ${outlineContent.trim() ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}`}>
             下一步：细纲 →
           </button>
         </div>
@@ -123,7 +123,7 @@ export default function OutlineEditor() {
       />
 
       {!prepareContent && !outlineContent && (
-        <div className="bg-warning/10 rounded-card border border-warning/30 p-4 mb-4 text-body text-text-secondary">
+        <div className="bg-warning/10 rounded-card border border-warning/30 p-4 mb-4 text-base text-text-secondary">
           ⚠️ 建议先去「准备」页面完成情绪定位和角色设计，再生成大纲效果更好。
           <button onClick={() => navigate(`/project/${id}/prepare`)} className="ml-2 text-primary hover:underline">去准备 →</button>
         </div>
@@ -132,28 +132,28 @@ export default function OutlineEditor() {
       {!outlineContent && !generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <span className="text-5xl mb-4 block">📐</span>
-          <h2 className="text-section-title text-text-main mb-2">生成故事大纲</h2>
-          <p className="text-body text-text-secondary mb-6">
+          <h2 className="text-lg text-text-main mb-2">生成故事大纲</h2>
+          <p className="text-base text-text-secondary mb-6">
             AI 将根据准备方案、风格库和拆文库，生成包含情绪弧线、爽点分布和钩子设计的完整大纲
           </p>
-          <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-body hover:bg-primary-hover transition-colors">
+          <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-base hover:bg-primary-hover transition-colors">
             🤖 生成大纲
           </button>
         </div>
       ) : generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-body text-text-main">AI 正在构思故事架构...</p>
-          <p className="text-caption text-text-secondary mt-1">正在学习参考内容，约需 40-80 秒</p>
+          <p className="text-base text-text-main">AI 正在构思故事架构...</p>
+          <p className="text-sm text-text-secondary mt-1">正在学习参考内容，约需 40-80 秒</p>
         </div>
       ) : (
         <div className="bg-white rounded-card border border-border p-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-section-title text-text-main">大纲</h2>
-            <button onClick={handleGenerate} className="text-caption text-primary hover:underline">🔄 重新生成</button>
+            <h2 className="text-lg text-text-main">大纲</h2>
+            <button onClick={handleGenerate} className="text-sm text-primary hover:underline">🔄 重新生成</button>
           </div>
           <textarea value={outlineContent} onChange={(e) => setOutlineContent(e.target.value)}
-            className="w-full min-h-[500px] px-4 py-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed" />
+            className="w-full min-h-[500px] px-4 py-3 border border-border-input rounded-btn text-base focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed" />
         </div>
       )}
     </div>

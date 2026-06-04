@@ -73,16 +73,16 @@ export default function ReferenceSelector({
         onClick={() => setCollapsed(!collapsed)}
         className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-bg-secondary transition-colors"
       >
-        <div className="flex items-center gap-2 text-body">
+        <div className="flex items-center gap-2 text-base">
           <span>📖</span>
           <span className="text-text-main">写作参考</span>
           {hasRefs && !collapsed && (
-            <span className="text-caption text-text-secondary">
+            <span className="text-sm text-text-secondary">
               （已选 {[primaryStyleId, ...auxiliaryStyleIds].filter(Boolean).length + disassemblyIds.length} 项）
             </span>
           )}
         </div>
-        <span className="text-caption text-text-secondary">
+        <span className="text-sm text-text-secondary">
           {collapsed ? (
             <span>
               {hasRefs ? (
@@ -101,23 +101,23 @@ export default function ReferenceSelector({
         <div className="px-4 py-3 border-t border-border space-y-4">
           {/* 风格库 */}
           <div>
-            <h4 className="text-caption font-medium text-text-secondary mb-2">🎨 风格库（左右AI写作风格）</h4>
+            <h4 className="text-sm font-medium text-text-secondary mb-2">🎨 风格库（左右AI写作风格）</h4>
             {styleLibraries.length === 0 ? (
-              <p className="text-caption text-text-placeholder">暂无风格库，先去「风格库」页面导入小说创建</p>
+              <p className="text-sm text-text-placeholder">暂无风格库，先去「风格库」页面导入小说创建</p>
             ) : (
               <div className="space-y-1">
                   {styleLibraries.map(lib => {
                     const isPrimary = primaryStyleId === lib.id
                     return (
                     <div key={lib.id} className="flex items-center gap-2 py-1">
-                      <span className="text-body text-text-main flex-1">{lib.name}</span>
+                      <span className="text-base text-text-main flex-1">{lib.name}</span>
                       <input
                         type="checkbox"
                         checked={isPrimary}
                         onChange={() => setPrimaryStyle(isPrimary ? null : lib.id)}
                         className="accent-primary"
                       />
-                      <span className="text-caption text-text-placeholder">主风格</span>
+                      <span className="text-sm text-text-placeholder">主风格</span>
                       <input
                         type="checkbox"
                         checked={auxiliaryStyleIds.includes(lib.id)}
@@ -127,21 +127,21 @@ export default function ReferenceSelector({
                         }}
                         className="accent-primary ml-2"
                       />
-                      <span className="text-caption text-text-placeholder">辅风格</span>
+                      <span className="text-sm text-text-placeholder">辅风格</span>
                     </div>
                   )})}
                 </div>
               )}
-              <p className="text-caption text-text-placeholder mt-1">
+              <p className="text-sm text-text-placeholder mt-1">
                 ☑ 主风格（单选）：AI 写作时以该风格为基调 &nbsp; ☑ 辅风格（多选）：作为点缀参考
               </p>
           </div>
 
           {/* 拆文库 */}
           <div>
-            <h4 className="text-caption font-medium text-text-secondary mb-2">🔬 拆文库（AI 学习爆款套路和结构）</h4>
+            <h4 className="text-sm font-medium text-text-secondary mb-2">🔬 拆文库（AI 学习爆款套路和结构）</h4>
             {disassemblies.length === 0 ? (
-              <p className="text-caption text-text-placeholder">暂无拆解项目，先去「拆文库」页面导入小说拆解</p>
+              <p className="text-sm text-text-placeholder">暂无拆解项目，先去「拆文库」页面导入小说拆解</p>
             ) : (
               <div className="space-y-1">
                 {disassemblies.map(d => (
@@ -152,15 +152,15 @@ export default function ReferenceSelector({
                       onChange={() => toggleDisassembly(d.id)}
                       className="accent-primary"
                     />
-                    <span className="text-body text-text-main flex-1">{d.name}</span>
-                    <span className="text-caption text-text-placeholder">
+                    <span className="text-base text-text-main flex-1">{d.name}</span>
+                    <span className="text-sm text-text-placeholder">
                       {d.current_stage >= 1 ? '已拆解' : '待拆解'}
                     </span>
                   </label>
                 ))}
               </div>
             )}
-            <p className="text-caption text-text-placeholder mt-1">
+            <p className="text-sm text-text-placeholder mt-1">
               ☑ 选中后，AI 会学习该书的黄金三章、人物设定、爽点套路和文风特征
             </p>
           </div>

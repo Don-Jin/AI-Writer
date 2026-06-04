@@ -2,7 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 全局样式 */
+:root {
+  --scrollbar-thumb: #CBD5E1;
+  --scrollbar-thumb-hover: #94A3B8;
+  --selection-bg: rgba(99, 102, 241, 0.16);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -12,12 +17,8 @@
 html, body, #root {
   height: 100%;
   font-family: 'Inter', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
-  font-size: 15px;
-  color: #1E293B;
-  background-color: #F8FAFC;
 }
 
-/* 滚动条样式 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -26,28 +27,44 @@ html, body, #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #CBD5E1;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94A3B8;
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* 文本选中色 */
 ::selection {
-  background-color: rgba(99, 102, 241, 0.16);
+  background-color: var(--selection-bg);
 }
 
-/* 全局过渡 */
 button, a, input, textarea, select {
-  transition: all 180ms ease-out;
+  transition: all 150ms ease-out;
 }
 
-/* 卡片 hover 微抬升 */
 .hover-lift {
   transition: transform 200ms ease-out, box-shadow 200ms ease-out;
 }
 .hover-lift:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.04);
+}
+
+/* ====== 内容截断工具类 ====== */
+.line-clamp-1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.line-clamp-3 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }

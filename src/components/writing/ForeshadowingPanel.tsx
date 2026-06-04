@@ -2,18 +2,20 @@ import { useState, useEffect, useCallback } from 'react'
 import type { ForeshadowingItem, ForeshadowingStatus, ForeshadowingPriority } from '../../types'
 
 const STATUS_LABELS: Record<ForeshadowingStatus, string> = {
-  planned: '📋 计划中', planted: '🌱 已埋下', buried: '🪨 已加固',
-  recycled: '♻️ 已复用', resolved: '✅ 已回收', expired: '⏰ 已过期'
+  pending: '📋 待埋', active: '🌱 已埋', done: '✅ 已完结'
 }
 
 const STATUS_COLORS: Record<ForeshadowingStatus, string> = {
-  planned: 'bg-gray-100 text-gray-600', planted: 'bg-blue-100 text-blue-700',
-  buried: 'bg-indigo-100 text-indigo-700', recycled: 'bg-purple-100 text-purple-700',
-  resolved: 'bg-green-100 text-green-700', expired: 'bg-red-100 text-red-500'
+  pending: 'bg-gray-100 text-gray-600', active: 'bg-blue-100 text-blue-700',
+  done: 'bg-green-100 text-green-700'
 }
 
 const PRIORITY_COLORS: Record<ForeshadowingPriority, string> = {
   critical: 'bg-red-500', high: 'bg-orange-400', normal: 'bg-blue-400', low: 'bg-gray-300'
+}
+
+const PRIORITY_LABELS: Record<ForeshadowingPriority, string> = {
+  critical: '核心', high: '重要', normal: '普通', low: '点缀'
 }
 
 interface Props {
@@ -25,6 +27,14 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
   const [items, setItems] = useState<ForeshadowingItem[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'active' | 'resolved'>('active')
+  const [editing, setEditing] = useState<ForeshadowingItem | null>(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [formData, setFormData] = useState({
+    foreshadow_id: '', description: '', status: 'pending' as ForeshadowingStatus,
+    priority: 'normal' as ForeshadowingPriority, planted_chapter: 0,
+    target_chapter: 0, notes: '', related_characters: '',
+    reveal_condition: '', reveal_ratio: 0,
+  })
 
   const loadItems = useCallback(async () => {
     if (!window.electronAPI) return
@@ -59,29 +69,78 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
     loadItems()
   }
 
+  const openEdit = (item: ForeshadowingItem) => {
+    setEditing(item)
+    setFormData({
+      foreshadow_id: item.foreshadow_id, description: item.description,
+      status: item.status, priority: item.priority,
+      planted_chapter: item.planted_chapter || 0, target_chapter: item.target_chapter || 0,
+      notes: item.notes || '', related_characters: (item.related_characters || []).join('、'),
+      reveal_condition: (item as any).reveal_condition || '', reveal_ratio: (item as any).reveal_ratio || 0,
+    })
+  }
+
+  const openAdd = () => {
+    setEditing(null); setShowAdd(true)
+    setFormData({
+      foreshadow_id: '', description: '', status: 'pending', priority: 'normal',
+      planted_chapter: 0, target_chapter: 0, notes: '', related_characters: '',
+      reveal_condition: '', reveal_ratio: 0,
+    })
+  }
+
+  const saveForm = async () => {
+    if (!window.electronAPI || !formData.description.trim()) return
+    const chars = formData.related_characters.split(/[、,，]/).map(s => s.trim()).filter(Boolean)
+    if (editing) {
+      await window.electronAPI.db.run(
+        `UPDATE foreshadowing_registry SET description=?, status=?, priority=?,
+         planted_chapter=?, target_chapter=?, notes=?, related_characters=?,
+         reveal_condition=?, reveal_ratio=?,
+         updated_at=datetime('now','localtime') WHERE id=?`,
+        [formData.description, formData.status, formData.priority,
+         formData.planted_chapter || null, formData.target_chapter || null,
+         formData.notes, JSON.stringify(chars),
+         formData.reveal_condition, formData.reveal_ratio, editing.id]
+      )
+    } else {
+      const fid = formData.foreshadow_id || `M-${Date.now().toString(36)}`
+      await window.electronAPI.db.run(
+        `INSERT OR IGNORE INTO foreshadowing_registry (project_id,foreshadow_id,description,status,priority,planted_chapter,target_chapter,notes,related_characters,reveal_condition,reveal_ratio)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [projectId, fid, formData.description, formData.status, formData.priority,
+         formData.planted_chapter || null, formData.target_chapter || null,
+         formData.notes, JSON.stringify(chars), formData.reveal_condition, formData.reveal_ratio]
+      )
+    }
+    setShowAdd(false); setEditing(null); loadItems()
+  }
+
   const filtered = items.filter(i => {
-    if (filter === 'active') return !['resolved', 'expired'].includes(i.status)
-    if (filter === 'resolved') return i.status === 'resolved'
+    if (filter === 'active') return i.status !== 'done'
+    if (filter === 'resolved') return i.status === 'done'
     return true
   })
 
-  const activeCount = items.filter(i => !['resolved', 'expired'].includes(i.status)).length
-  const resolvedCount = items.filter(i => i.status === 'resolved').length
+  const activeCount = items.filter(i => i.status !== 'done').length
+  const resolvedCount = items.filter(i => i.status === 'done').length
   const recoveryRate = items.length > 0 ? Math.round((resolvedCount / items.length) * 100) : 0
 
   return (
     <div className="h-full overflow-auto">
-      {/* 统计头部 */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border">
-        <span className="text-xs text-text-secondary">
-          {items.length}个 · {resolvedCount}已回收 · {recoveryRate}%
-        </span>
-        <div className="flex-1" />
+      {/* 统计 + 操作 */}
+      <div className="px-3 py-1.5 border-b border-border space-y-1">
+        {/* 统计行 */}
+        <div className="flex items-center justify-between text-xs text-text-secondary">
+          <span>{items.length}个 · {resolvedCount}已回收 · {recoveryRate}%</span>
+          <button onClick={openAdd} className="px-2 py-0.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light">＋ 添加</button>
+        </div>
+        {/* 筛选行 */}
         <div className="flex gap-1">
           {(['active', 'resolved', 'all'] as const).map(f => (
             <button key={f} onClick={() => setFilter(f)}
-              className={`px-2 py-0.5 text-xs rounded transition-colors ${
-                filter === f ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-secondary'
+              className={`flex-1 px-2 py-0.5 text-xs rounded-btn transition-colors text-center ${
+                filter === f ? 'bg-primary text-white' : 'bg-bg-secondary text-text-secondary hover:bg-border'
               }`}
             >
               {f === 'active' ? '未回收' : f === 'resolved' ? '已回收' : '全部'}
@@ -116,22 +175,25 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
                     </span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <select
-                      value={item.status}
-                      onChange={e => updateStatus(item.id, e.target.value as ForeshadowingStatus)}
-                      className="text-xs border border-border-input rounded px-1 py-0.5 bg-white"
-                    >
-                      {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                        <option key={k} value={k}>{v}</option>
-                      ))}
-                    </select>
+                    {item.status === 'active' && (
+                      <button onClick={() => updateStatus(item.id, 'done')}
+                        className="text-xxs px-1.5 py-0.5 rounded border border-green-300 text-green-600 hover:bg-green-50"
+                      >标记回收</button>
+                    )}
+                    {item.status === 'done' && (
+                      <button onClick={() => updateStatus(item.id, 'active')}
+                        className="text-xxs px-1.5 py-0.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
+                      >重新激活</button>
+                    )}
+                    <button onClick={() => openEdit(item)}
+                      className="text-xs text-text-placeholder hover:text-primary px-0.5" title="编辑">✏️</button>
                     <button onClick={() => deleteItem(item.id)}
                       className="text-xs text-text-placeholder hover:text-danger transition-colors px-0.5"
                       title="删除"
                     >🗑</button>
                   </div>
                 </div>
-                <p className="text-xs text-text-main mb-1.5">{item.description}</p>
+                <p className="text-xs text-text-main mb-1.5 line-clamp-2">{item.description}</p>
                 <div className="flex flex-wrap gap-2 text-xs text-text-secondary">
                   {item.planted_chapter && (
                     <span>📍 第{item.planted_chapter}章{ch ? ` ${ch.title}` : ''}</span>
@@ -150,6 +212,86 @@ export default function ForeshadowingPanel({ projectId, chapters }: Props) {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* 编辑/添加弹窗 */}
+      {(editing || showAdd) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => { setEditing(null); setShowAdd(false) }}>
+          <div className="bg-white rounded-card shadow-card p-4 w-[400px] max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-medium mb-3">{editing ? '编辑伏笔' : '添加伏笔'}</h3>
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-xs text-text-secondary">ID</label>
+                <input value={formData.foreshadow_id} onChange={e => setFormData({...formData, foreshadow_id: e.target.value})}
+                  className="w-full text-xs border border-border-input rounded px-2 py-1" placeholder="如 F001-1，留空自动生成" />
+              </div>
+              <div>
+                <label className="text-xs text-text-secondary">描述 *</label>
+                <textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}
+                  className="w-full text-xs border border-border-input rounded px-2 py-1 h-16" placeholder="伏笔内容描述" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">状态</label>
+                  <select value={formData.status} onChange={e => setFormData({...formData, status: e.target.value as ForeshadowingStatus})}
+                    className="w-full text-xs border border-border-input rounded px-1.5 py-1">
+                    {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">优先级</label>
+                  <select value={formData.priority} onChange={e => setFormData({...formData, priority: e.target.value as ForeshadowingPriority})}
+                    className="w-full text-xs border border-border-input rounded px-1.5 py-1">
+                    {Object.entries(PRIORITY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">埋设章节</label>
+                  <input type="number" value={formData.planted_chapter || ''} onChange={e => setFormData({...formData, planted_chapter: Number(e.target.value)})}
+                    className="w-full text-xs border border-border-input rounded px-2 py-1" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">目标章节</label>
+                  <input type="number" value={formData.target_chapter || ''} onChange={e => setFormData({...formData, target_chapter: Number(e.target.value)})}
+                    className="w-full text-xs border border-border-input rounded px-2 py-1" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-text-secondary">关联角色（、分隔）</label>
+                <input value={formData.related_characters} onChange={e => setFormData({...formData, related_characters: e.target.value})}
+                  className="w-full text-xs border border-border-input rounded px-2 py-1" placeholder="角色A、角色B" />
+              </div>
+              <div>
+                <label className="text-xs text-text-secondary">回收条件</label>
+                <input value={formData.reveal_condition} onChange={e => setFormData({...formData, reveal_condition: e.target.value})}
+                  className="w-full text-xs border border-border-input rounded px-2 py-1" placeholder="如：当主角发现XX证据时触发" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">揭示比例 (%)</label>
+                  <input type="number" value={formData.reveal_ratio} onChange={e => setFormData({...formData, reveal_ratio: Number(e.target.value)})}
+                    className="w-full text-xs border border-border-input rounded px-2 py-1" min={0} max={100} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-text-secondary">备注</label>
+                  <input value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})}
+                    className="w-full text-xs border border-border-input rounded px-2 py-1" />
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-3">
+              <button onClick={() => { setEditing(null); setShowAdd(false) }}
+                className="px-3 py-1 text-xs border border-border-input text-text-secondary rounded-btn">取消</button>
+              <button onClick={saveForm}
+                className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
+                disabled={!formData.description.trim()}>
+                {editing ? '保存' : '添加'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

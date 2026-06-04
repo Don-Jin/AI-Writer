@@ -73,7 +73,7 @@ export default function SettingList() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-page-title text-text-main">设定库</h1>
+        <h1 className="text-xl text-text-main">设定库</h1>
         <div className="flex gap-2">
           <button onClick={() => openModal('import')}
             className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors"
@@ -87,8 +87,8 @@ export default function SettingList() {
       {libraries.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-text-secondary">
           <span className="text-5xl mb-4">📋</span>
-          <p className="text-body mb-2">还没有设定库</p>
-          <p className="text-caption">导入小说提取设定，或新建空白设定库手动填写</p>
+          <p className="text-base mb-2">还没有设定库</p>
+          <p className="text-sm">导入小说提取设定，或新建空白设定库手动填写</p>
         </div>
       ) : (
         <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
@@ -122,27 +122,27 @@ export default function SettingList() {
         {creating ? (
           <div className="flex flex-col items-center py-8 gap-3">
             <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            <p className="text-body text-text-main">正在创建...</p>
+            <p className="text-base text-text-main">正在创建...</p>
           </div>
         ) : (
           <div className="flex flex-col gap-4">
             <div>
-              <label className="block text-body text-text-main mb-2">名称 *</label>
+              <label className="block text-base text-text-main mb-2">名称 *</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)}
                 placeholder="例如：盘龙设定" autoFocus
-                className="w-full h-10 px-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
+                className="w-full h-10 px-3 border border-border-input rounded-btn text-base focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
             </div>
 
             {modalType === 'import' && (
               <>
                 <div>
-                  <label className="block text-body text-text-main mb-2">导入方式</label>
+                  <label className="block text-base text-text-main mb-2">导入方式</label>
                   <div className="flex gap-2">
                     <button onClick={() => setMode('file')}
-                      className={`px-4 py-2 rounded-btn text-body ${mode === 'file' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
+                      className={`px-4 py-2 rounded-btn text-base ${mode === 'file' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
                     >📁 上传文件</button>
                     <button onClick={() => setMode('paste')}
-                      className={`px-4 py-2 rounded-btn text-body ${mode === 'paste' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
+                      className={`px-4 py-2 rounded-btn text-base ${mode === 'paste' ? 'bg-primary text-white' : 'border border-border-input text-text-secondary hover:bg-bg-secondary'}`}
                     >📋 粘贴文本</button>
                   </div>
                 </div>
@@ -150,15 +150,15 @@ export default function SettingList() {
                   <div onClick={handleSelectFile}
                     className="border-2 border-dashed border-border-input rounded-card p-8 text-center cursor-pointer hover:border-primary hover:bg-primary-light/30">
                     <span className="text-3xl mb-2 block">📂</span>
-                    {fileName ? <p className="text-body text-text-main">{fileName}</p>
-                      : <><p className="text-body text-text-secondary mb-1">点击选择文件</p>
-                        <p className="text-caption text-text-placeholder">支持 TXT、Word、Markdown</p></>}
+                    {fileName ? <p className="text-base text-text-main">{fileName}</p>
+                      : <><p className="text-base text-text-secondary mb-1">点击选择文件</p>
+                        <p className="text-sm text-text-placeholder">支持 TXT、Word、Markdown</p></>}
                   </div>
                 )}
                 {mode === 'paste' && (
                   <textarea value={pastedText} onChange={e => setPastedText(e.target.value)}
                     placeholder="将小说全文粘贴到此处" rows={10}
-                    className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
+                    className="w-full px-3 py-2 border border-border-input rounded-btn text-base resize-none focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 placeholder:text-text-placeholder" />
                 )}
               </>
             )}
@@ -180,7 +180,7 @@ function SettingCard({ library, onClick, onDelete }: { library: SettingLibrary; 
     <div onClick={onClick}
       className="bg-white rounded-card border border-border p-5 hover:shadow-md hover:border-primary/30 transition-all group cursor-pointer">
       <div className="flex items-start justify-between mb-3">
-        <h3 className="text-section-title text-text-main">
+        <h3 className="text-lg text-text-main">
           <InlineEdit value={library.name} onSave={async (newName) => {
             if (window.electronAPI) await window.electronAPI.db.run('UPDATE setting_libraries SET name=? WHERE id=?', [newName, library.id])
           }} />
@@ -188,7 +188,7 @@ function SettingCard({ library, onClick, onDelete }: { library: SettingLibrary; 
         <button onClick={e => { e.stopPropagation(); onDelete() }}
           className="opacity-0 group-hover:opacity-100 text-text-placeholder hover:text-danger transition-all">🗑</button>
       </div>
-      <div className="space-y-1 text-caption">
+      <div className="space-y-1 text-sm">
         {charCount > 0 && <div className="flex justify-between"><span>👤 角色</span><span className="text-text-secondary">{charCount}</span></div>}
         {worldCount > 0 && <div className="flex justify-between"><span>🌍 世界观</span><span className="text-text-secondary">{worldCount}</span></div>}
         {ruleCount > 0 && <div className="flex justify-between"><span>📏 规则</span><span className="text-text-secondary">{ruleCount}</span></div>}

@@ -63,7 +63,7 @@ export default function ProjectList() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-page-title text-text-main">我的小说</h1>
+        <h1 className="text-xl text-text-main">我的小说</h1>
         <button
           onClick={() => setModalOpen(true)}
           className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors"
@@ -76,8 +76,8 @@ export default function ProjectList() {
       {projects.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-text-secondary">
           <span className="text-5xl mb-4">📝</span>
-          <p className="text-body mb-2">还没有小说项目</p>
-          <p className="text-caption">点击「新建项目」开始你的创作之旅</p>
+          <p className="text-base mb-2">还没有小说项目</p>
+          <p className="text-sm">点击「新建项目」开始你的创作之旅</p>
         </div>
       ) : (
         <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
@@ -89,7 +89,7 @@ export default function ProjectList() {
                          hover:shadow-md hover:border-primary/30 transition-all group"
             >
               <div className="flex items-start justify-between mb-3">
-                <h3 className="text-section-title text-text-main">
+                <h3 className="text-lg text-text-main">
                   <InlineEdit value={project.title} onSave={async (newName) => {
                     if (window.electronAPI) { await window.electronAPI.db.run('UPDATE novel_projects SET title=? WHERE id=?', [newName, project.id]) }
                   }} />
@@ -105,15 +105,15 @@ export default function ProjectList() {
                 </button>
               </div>
               {project.description && (
-                <p className="text-caption text-text-secondary mb-3 line-clamp-2">
+                <p className="text-sm text-text-secondary mb-3 line-clamp-2">
                   {project.description}
                 </p>
               )}
               <div className="flex items-center justify-between">
-                <span className="text-caption px-2 py-0.5 rounded bg-primary-light text-primary">
+                <span className="text-sm px-2 py-0.5 rounded bg-primary-light text-primary">
                   {statusLabel[project.status] || project.status}
                 </span>
-                <span className="text-caption text-text-placeholder">
+                <span className="text-sm text-text-placeholder">
                   {project.updated_at?.slice(0, 10)}
                 </span>
               </div>
@@ -147,33 +147,33 @@ export default function ProjectList() {
       >
         <div className="flex flex-col gap-4">
           <div>
-            <label className="block text-body text-text-main mb-2">书名 *</label>
+            <label className="block text-base text-text-main mb-2">书名 *</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="请输入小说书名"
               autoFocus
-              className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+              className="w-full h-10 px-3 border border-border-input rounded-btn text-base
                          focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                          placeholder:text-text-placeholder"
             />
           </div>
 
           <div>
-            <label className="block text-body text-text-main mb-2">简介</label>
+            <label className="block text-base text-text-main mb-2">简介</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="简单描述一下你想写的故事（可选）"
               rows={4}
-              className="w-full px-3 py-2 border border-border-input rounded-btn text-body resize-none
+              className="w-full px-3 py-2 border border-border-input rounded-btn text-base resize-none
                          focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                          placeholder:text-text-placeholder"
             />
           </div>
 
-          <p className="text-caption text-text-secondary">
+          <p className="text-sm text-text-secondary">
             💡 创建项目后，你可以选择风格库，然后按「大纲 → 细纲 → 章节」的顺序生成小说。
           </p>
         </div>

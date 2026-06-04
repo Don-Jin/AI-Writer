@@ -48,14 +48,14 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <aside className="w-sidebar bg-bg-sidebar flex flex-col shrink-0">
-      <div className="h-12 flex items-center px-5 border-b border-border gap-2">
+      <div className="h-9 flex items-center justify-center border-b border-border">
         {onToggle && (
-          <button onClick={onToggle} className="text-xs text-text-placeholder hover:text-primary" title="收起菜单">◀</button>
+          <button onClick={onToggle} className="absolute left-2 text-xs text-text-placeholder hover:text-primary" title="收起菜单">◀</button>
         )}
-        <span className="text-page-title text-primary">📖 AI写作</span>
+        <span className="text-sm text-primary font-medium">📖 AI写作</span>
       </div>
 
-      <nav className="flex-1 py-3">
+      <nav className="flex-1 py-3 flex flex-col gap-1">
         {navItems.map((item) => {
           const isActive = (item.path === '/' && location.pathname === '/') ||
             (item.path !== '/' && location.pathname.startsWith(item.path))
@@ -63,20 +63,20 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <NavLink
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-3 h-11 px-5 mx-2 rounded-btn text-body transition-colors
+              className={`flex items-center gap-2.5 h-10 pl-3 pr-2 mx-1.5 rounded-btn text-lg transition-colors
                 ${isActive
-                  ? 'bg-primary-light text-primary border-l-[3px] border-primary pl-[17px]'
-                  : 'text-text-secondary hover:bg-white hover:text-text-main border-l-[3px] border-transparent pl-[17px]'
+                  ? 'bg-primary-light text-primary font-medium'
+                  : 'text-text-secondary hover:bg-white hover:text-text-main'
                 }`}
             >
-              <span className="text-lg">{item.icon}</span>
+              <span>{item.icon}</span>
               <span>{item.label}</span>
             </NavLink>
           )
         })}
       </nav>
 
-      <div className="px-5 py-3 text-caption text-text-placeholder border-t border-border">
+      <div className="text-center py-2 text-xxs text-text-placeholder border-t border-border">
         v1.7.0
       </div>
     </aside>

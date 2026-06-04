@@ -112,14 +112,14 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h1 className="text-page-title text-text-main mb-6">设置</h1>
+      <h1 className="text-xl text-text-main mb-6">设置</h1>
 
       <div className="bg-white rounded-card border border-border p-5 max-w-lg">
-        <h2 className="text-section-title text-text-main mb-4">🤖 AI 模型配置</h2>
+        <h2 className="text-lg text-text-main mb-4">🤖 AI 模型配置</h2>
 
         {/* Provider 选择 */}
         <div className="mb-4">
-          <label className="block text-body text-text-main mb-2">AI 供应商</label>
+          <label className="block text-base text-text-main mb-2">AI 供应商</label>
           <div className="grid grid-cols-2 gap-2">
             {PROVIDERS.map(p => (
               <button
@@ -141,54 +141,54 @@ export default function SettingsPage() {
 
         {/* API Base URL */}
         <div className="mb-4">
-          <label className="block text-body text-text-main mb-2">API 地址</label>
+          <label className="block text-base text-text-main mb-2">API 地址</label>
           <input
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://api.deepseek.com/v1"
             disabled={!loaded}
-            className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+            className="w-full h-10 px-3 border border-border-input rounded-btn text-base
                        focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                        placeholder:text-text-placeholder disabled:bg-bg-secondary disabled:text-text-placeholder"
           />
-          <p className="text-caption text-text-secondary mt-1">
+          <p className="text-sm text-text-secondary mt-1">
             {currentProvider ? `${currentProvider.name} 默认：${currentProvider.defaultUrl}` : ''}
           </p>
         </div>
 
         {/* 模型 */}
         <div className="mb-4">
-          <label className="block text-body text-text-main mb-2">模型名称</label>
+          <label className="block text-base text-text-main mb-2">模型名称</label>
           <input
             type="text"
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="deepseek-chat"
             disabled={!loaded}
-            className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+            className="w-full h-10 px-3 border border-border-input rounded-btn text-base
                        focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                        placeholder:text-text-placeholder disabled:bg-bg-secondary disabled:text-text-placeholder"
           />
-          <p className="text-caption text-text-secondary mt-1">
+          <p className="text-sm text-text-secondary mt-1">
             {currentProvider ? `${currentProvider.name} 推荐模型：${currentProvider.defaultModel}` : '输入模型名称'}
           </p>
         </div>
 
         {/* API Key */}
         <div className="mb-4">
-          <label className="block text-body text-text-main mb-2">API Key *</label>
+          <label className="block text-base text-text-main mb-2">API Key *</label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
             disabled={!loaded}
-            className="w-full h-10 px-3 border border-border-input rounded-btn text-body
+            className="w-full h-10 px-3 border border-border-input rounded-btn text-base
                        focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
                        placeholder:text-text-placeholder disabled:bg-bg-secondary disabled:text-text-placeholder"
           />
-          <p className="text-caption text-text-secondary mt-1">
+          <p className="text-sm text-text-secondary mt-1">
             🔒 API Key 仅存储在你的电脑本地，不会上传到任何第三方服务器
           </p>
         </div>
@@ -198,7 +198,7 @@ export default function SettingsPage() {
           <button
             onClick={handleSave}
             disabled={saving || !loaded}
-            className={`px-4 py-2 rounded-btn text-body transition-colors
+            className={`px-4 py-2 rounded-btn text-base transition-colors
               ${loaded ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}
             `}
           >
@@ -207,7 +207,7 @@ export default function SettingsPage() {
           <button
             onClick={handleTest}
             disabled={!apiKey.trim() || testing || !loaded}
-            className={`px-4 py-2 rounded-btn text-body transition-colors
+            className={`px-4 py-2 rounded-btn text-base transition-colors
               ${apiKey.trim() && !testing && loaded
                 ? 'border border-primary text-primary hover:bg-primary-light'
                 : 'border border-border-input text-text-placeholder cursor-not-allowed'
@@ -220,12 +220,12 @@ export default function SettingsPage() {
 
       {/* 版本更新 */}
       <div className="bg-white rounded-card border border-border p-5 max-w-lg mt-4">
-        <h2 className="text-section-title text-text-main mb-3">🔄 版本更新</h2>
-        <p className="text-body text-text-secondary mb-3">当前版本：{updateInfo?.currentVersion || 'v1.7.0'}</p>
+        <h2 className="text-lg text-text-main mb-3">🔄 版本更新</h2>
+        <p className="text-base text-text-secondary mb-3">当前版本：{updateInfo?.currentVersion || 'v1.7.0'}</p>
         <button
           onClick={checkUpdate}
           disabled={checking}
-          className={`px-4 py-2 rounded-btn text-body transition-colors
+          className={`px-4 py-2 rounded-btn text-base transition-colors
             ${checking ? 'bg-border text-text-placeholder' : 'bg-primary text-white hover:bg-primary-hover'}
           `}
         >
@@ -248,8 +248,8 @@ export default function SettingsPage() {
 
       {/* 使用说明 */}
       <div className="bg-white rounded-card border border-border p-5 max-w-lg mt-4">
-        <h2 className="text-section-title text-text-main mb-3">📖 使用说明</h2>
-        <ol className="text-body text-text-secondary space-y-2 list-decimal list-inside">
+        <h2 className="text-lg text-text-main mb-3">📖 使用说明</h2>
+        <ol className="text-base text-text-secondary space-y-2 list-decimal list-inside">
           <li>选择你的 AI 供应商（DeepSeek / OpenAI / Claude / 通义千问）</li>
           <li>在对应平台注册并获取 API Key</li>
           <li>将 API Key 填入上方输入框，点击「测试连接」确认可用</li>

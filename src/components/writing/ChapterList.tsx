@@ -30,7 +30,7 @@ export default function ChapterList({ chapterPlans, generatedChapters, currentCh
   return (
     <div className="w-56 shrink-0 bg-white rounded-card border border-border overflow-hidden">
       <div className="px-3 py-2 border-b border-border bg-bg-secondary">
-        <span className="text-caption font-medium text-text-secondary">
+        <span className="text-sm font-medium text-text-secondary">
           目录 ({generatedChapters.filter(c => c.status !== 'draft').length}/{chapterPlans.length})
         </span>
       </div>
@@ -42,7 +42,7 @@ export default function ChapterList({ chapterPlans, generatedChapters, currentCh
             <button
               key={plan.chapter_number}
               onClick={() => onSelect(plan.chapter_number)}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-caption
+              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm
                 border-b border-border last:border-b-0 transition-colors
                 ${isActive ? 'bg-primary-light text-primary' : 'hover:bg-bg-secondary text-text-secondary'}
               `}

@@ -159,7 +159,7 @@ export default function SettingDetail() {
     <div>
       <div className="flex items-center gap-3 mb-4">
         <button onClick={() => navigate('/setting-lib')} className="text-text-secondary hover:text-text-main">← 返回</button>
-        <h1 className="text-page-title text-text-main">{proj.name}</h1>
+        <h1 className="text-xl text-text-main">{proj.name}</h1>
         <div className="flex-1" />
         {hasSource && (
           !running ? (
@@ -173,12 +173,12 @@ export default function SettingDetail() {
         )}
       </div>
 
-      {/* 类别标签 — 单行 flex-1 挤压不换行 */}
-      <div className="flex border-b border-border mb-4">
+      {/* 类别标签 — 可横滚，不挤压 */}
+      <div className="flex border-b border-border mb-4 overflow-x-auto">
         {CATS.map(c => (
           <button key={c.key} onClick={() => { setCat(c.key); setShowAddForm(false) }}
-            className={`flex-1 flex items-center justify-center gap-1 py-2 text-sm transition-colors
-              ${cat === c.key ? 'text-primary border-b-2 border-primary font-medium' : 'text-text-secondary hover:text-text-main'}`}
+            className={`flex-none px-2 py-1.5 text-sm whitespace-nowrap transition-colors
+              ${cat === c.key ? 'text-primary border-b-2 border-primary font-semibold' : 'text-text-secondary hover:text-text-main'}`}
           >{c.label} <span className="text-text-placeholder">({data[c.key]?.length || 0})</span></button>
         ))}
       </div>
@@ -249,9 +249,9 @@ export default function SettingDetail() {
           暂无{catLabel}数据，点击「+ 手动添加」或{hasSource ? '「提取' + catLabel + '」' : '先导入小说'}
         </div>
       ) : (
-        <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
+        <div className="space-y-1">
           {currentItems.map((item: any, i: number) => (
-            <div key={i} className="bg-white rounded-card border border-border p-3 hover:border-primary/20 transition-colors group">
+            <div key={i} className="bg-bg-secondary/30 rounded px-2 py-1.5 hover:bg-bg-secondary/60 transition-colors group">
               {cat === 'characters' && <>
                 <Field label="姓名" value={item.name} path={`characters.${i}.name`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
                 <Field label="身份" value={item.info} path={`characters.${i}.info`} ef={editField} ev={editValue} onEdit={startEdit} onSave={saveEdit} onChange={setEditValue} />
@@ -288,7 +288,7 @@ function Field({ label, value, path, ef, ev, onEdit, onSave, onChange }: {
   onEdit: (p: string, v: string) => void; onSave: () => void; onChange: (v: string) => void
 }) {
   return (
-    <div className="flex items-start gap-2 text-sm mb-1">
+    <div className="flex items-start gap-2 text-sm mb-1.5">
       <span className="text-text-placeholder shrink-0">{label}：</span>
       {ef === path ? (
         <div className="flex-1 flex gap-1">
@@ -296,7 +296,7 @@ function Field({ label, value, path, ef, ev, onEdit, onSave, onChange }: {
           <button onClick={onSave} className="text-xs text-primary">保存</button>
         </div>
       ) : (
-        <span className="text-text-main cursor-pointer hover:text-primary flex-1" onClick={() => onEdit(path, value)}>{value || '-'}</span>
+        <span className="text-text-main cursor-pointer hover:text-primary flex-1 line-clamp-2" onClick={() => onEdit(path, value)}>{value || '-'}</span>
       )}
     </div>
   )

@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
+import VolumePanel from './VolumePanel'
+import ReviewPanel from './ReviewPanel'
+import type { ParagraphScore } from '../../services/deslop'
 import ForeshadowingPanel from './ForeshadowingPanel'
 import TimelinePanel from './TimelinePanel'
 import CanonFactPanel from './CanonFactPanel'
@@ -14,10 +17,20 @@ import {
   CHAPTER_SYSTEM, CHAPTER_USER,
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
   CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
+  EVENT_EXTRACTION_SYSTEM, EVENT_EXTRACTION_USER,
+  NARRATIVE_STATE_REPORT_SYSTEM, NARRATIVE_STATE_REPORT_USER,
   CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER,
-  buildMinimalContext,
-  REVIEW_SYSTEM, REVIEW_USER, AUTO_FIX_SYSTEM, AUTO_FIX_USER,
+  buildMinimalContext, buildStateContext,
+  AUTO_FIX_SYSTEM, AUTO_FIX_USER,
 } from '../../services/generator'
+import {
+  checkChapter, applyStatePatches, calcInfoLoss, buildRewritePrompt,
+  takeSnapshot, diffSnapshot, buildStatePatchFromEvents, getCalibrationStats,
+  computeStateDrift, selectMode, modeTvDelta, modeDecayRate, modeDriftBonus,
+  DEFAULT_REWRITE_LIMIT,
+  type Violation, type CheckResult, type StatePatch,
+  type NormalizedLeakScore, type EventExtractionResult,
+} from '../../services/checker'
 import type { NovelProject, Chapter, StyleLibrary, SettingLibrary, PersonalityProject } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
 
@@ -33,7 +46,6 @@ interface Volume {
   foreshadowing?: string
   foreshadowing_planted?: string[]
   foreshadowing_recovered?: string[]
-  // v1.7.0 卷纲优化新增字段
   word_count_target?: number
   connection_prev?: string
   connection_next?: string
@@ -44,12 +56,28 @@ interface Volume {
   foreshadowing_advance?: string
   character_milestones?: { character: string; start_state: string; end_state: string; key_event: string }[]
   conflict_nodes?: { description: string; chapter_segment: string; escalation_type: string }[]
+  nodes?: { name: string; chapter_segment: string; task: string; pacing: string; content: string; disasm_ref?: string; setting_ref?: string }[]
+  cool_density?: string
+  golden_five?: string
+  timeline_context?: { current_day: number; days_covered: number }
+  outline_version?: number
+  version?: number
 }
 interface ChapterPlan {
-  chapter_number: number; title: string; summary: string
-  characters: string[]; key_events: string[]
+  chapter_number: number; title: string
+  summary?: string; characters?: string[]; key_events?: string[]
   estimated_words: number; emotional_goal?: string
   function?: string; ending_type?: string
+  core_event?: string; plot_beats?: string[]
+  emotional_arc?: string
+  opening_hook?: { type: string; detail: string }
+  closing_hook?: { type: string; impact: string }
+  cool_moment?: string; status?: string
+  forbidden?: string[]; scene_count?: number
+  max_info_reveal?: string; emotion_cap?: string
+  allowed_reveal?: { world: number; plot: number; character: number }
+  volume_version?: number
+  plan_version?: number
 }
 
 interface ChapterFix {
@@ -119,6 +147,13 @@ function buildSettingContext(
 }
 
 /** 构建风格库上下文（正文用） — v3 丰富约束 */
+/** 从长文本中提取条目列表（按句号/换行/分号拆分，取前N条） */
+function extractItems(text: string | undefined, maxItems: number): string[] {
+  if (!text || text.length < 5) return []
+  const items = text.split(/[。；\n]+/).map(s => s.trim()).filter(s => s.length > 3)
+  return items.slice(0, maxItems)
+}
+
 function buildStyleContext(
   primaryStyleId: number | null, auxStyleIds: number[],
   styleLibraries: StyleLibrary[]
@@ -128,55 +163,62 @@ function buildStyleContext(
   if (!styles.length) return ''
   return styles.map((s) => {
     const p = s.style_profile as any
-    const parts: string[] = []
-    const n = p?.narrative
-    const rh = p?.sentence_rhythm
-    const pg = p?.paragraph
-    const l = p?.language
-    const a = p?.atmosphere
+    const n = p?.narrative; const rh = p?.sentence_rhythm
+    const pg = p?.paragraph; const l = p?.language; const a = p?.atmosphere
+    const prefix = `【🎨 风格约束——${s.id === primaryStyleId ? '主' : '辅'}】${s.name}`
+    const hard: string[] = []; const soft: string[] = []; const style: string[] = []
 
-    // v3 格式（sentence_rhythm 是对象）
+    // ── 🔴 硬约束 ≤7条 ──
+    if (n?.perspective) hard.push(`- 使用「${n.perspective}」。禁止切换视角。`)
+    if (n?.pov_rules) hard.push(`- ${n.pov_rules}`)
+    if (pg?.forbidden) hard.push(`- 禁止：${pg.forbidden}`)
+    if (l?.forbidden_words) {
+      const words = l.forbidden_words.split(/[,，、\s]+/).filter((w: string) => w.length > 1)
+      if (words.length > 0) hard.push(`- 禁用词汇（出现即违规）：${words.slice(0, 20).join('、')}`)
+    }
+
+    // ── 🟡 软约束 ≤12条 ──
     if (rh && typeof rh === 'object') {
-      if (n?.perspective || n?.pov_rules) parts.push(`【叙事】${[n.perspective, n.pov_rules].filter(Boolean).join('。')}`)
-      if (n?.narrator_intrusion) parts.push(`叙事者插嘴：${n.narrator_intrusion}`)
-      const srParts = [`短≤${rh.short_max || '?'}字`, `长≥${rh.long_min || '?'}字`]
-      if (rh.exception) srParts.push(`例外：${rh.exception}`)
-      if (rh.density) srParts.push(`密度：${rh.density}`)
-      parts.push(`【句式】${srParts.join('。')}`)
-      if (pg?.by_scene_type) parts.push(`【段落】${pg.by_scene_type}`)
-      if (pg?.habit) parts.push(`段落习惯：${pg.habit}`)
-      if (pg?.forbidden) parts.push(`禁止：${pg.forbidden}`)
-      if (l?.vocab_level) parts.push(`【词汇】${l.vocab_level}`)
-      if (l?.dialogue_vs_narrative) parts.push(`叙事vs对话：${l.dialogue_vs_narrative}`)
-      if (l?.forbidden_words) parts.push(`禁用词类型：${l.forbidden_words}`)
-      if (a?.emotion_scale) parts.push(`【情绪档位】${a.emotion_scale}`)
-      if (a?.level_triggers) parts.push(`升档触发：${a.level_triggers}`)
-      if (a?.must_downgrade) parts.push(`降档场景：${a.must_downgrade}`)
+      if (rh.short_max) soft.push(`- 短句≤${rh.short_max}字`)
+      if (rh.long_min) soft.push(`- 长句≥${rh.long_min}字`)
+      if (rh.density) soft.push(`- 句式密度：${rh.density}`)
+      if (rh.exception) soft.push(`- 例外：${rh.exception}`)
+    } else if (typeof rh === 'string' && rh.length > 2) {
+      soft.push(`- 句式：${rh}`)
     } else {
-      // v2 格式（sentence_rhythm 是字符串或其他）
-      if (n?.perspective || n?.distance) parts.push(`叙事：${[n?.perspective, n?.distance].filter(Boolean).join('，')}`)
-      if (p?.sentence_rhythm && typeof p?.sentence_rhythm === 'string') parts.push(`句式：${p.sentence_rhythm}`)
-      if (l?.vocabulary || l?.dialogue) parts.push(`语言：${[l?.vocabulary, l?.dialogue].filter(Boolean).join('；')}`)
-      if (pg?.ratio || pg?.habit) parts.push(`段落：${[pg?.ratio, pg?.habit].filter(Boolean).join('；')}`)
-      if (a?.tone || a?.emotion_style) parts.push(`氛围：${[a?.tone, a?.emotion_style].filter(Boolean).join('，')}`)
+      const ws = p?.writing_style
+      if (ws?.sentence_characteristics) soft.push(`- 句式：${ws.sentence_characteristics}`)
+    }
+    if (l?.vocab_level) soft.push(`- 词汇层级：${l.vocab_level}`)
+    if (l?.dialogue_vs_narrative) soft.push(`- 叙事vs对话：${l.dialogue_vs_narrative}`)
+    if (a?.emotion_scale) soft.push(`- 情绪跨度：${a.emotion_scale}`)
+    if (a?.level_triggers) soft.push(`- 升档触发：${a.level_triggers}`)
+    if (a?.must_downgrade) soft.push(`- 必须降档场景：${a.must_downgrade}`)
+    if (pg?.habit) soft.push(`- 段落习惯：${pg.habit}`)
+    if (pg?.by_scene_type) soft.push(`- 场景段落：${pg.by_scene_type}`)
+
+    // ── 🔵 风格漂移 ≤15条 ──
+    if (n?.narrator_intrusion) style.push(`- 叙事者行为：${n.narrator_intrusion}`)
+    if (a?.tone) style.push(`- 氛围：${a.tone}`)
+    else if (a?.primary) style.push(`- 氛围：${a.primary}`)
+    // v2/旧格式回退
+    if (!hard.length && !soft.length) {
+      const ws = p?.writing_style; const lf = p?.language_features
+      if (ws?.narrative_perspective) hard.push(`- 使用「${ws.narrative_perspective}」`)
+      if (ws?.pace) soft.push(`- 节奏：${ws.pace}`)
+      if (lf?.vocabulary_preference) soft.push(`- 词汇：${lf.vocabulary_preference}`)
+      if (ws?.paragraph_ratio) soft.push(`- 段落：${ws.paragraph_ratio}`)
     }
 
-    // 旧格式 — 回退
-    if (!parts.length) {
-      const ws = p?.writing_style
-      const lf = p?.language_features
-      if (ws?.narrative_perspective) parts.push(`叙事：${ws.narrative_perspective}`)
-      if (ws?.sentence_characteristics || ws?.pace) parts.push(`句式：${[ws?.sentence_characteristics, ws?.pace].filter(Boolean).join('，')}`)
-      if (ws?.paragraph_ratio) parts.push(`段落：${ws.paragraph_ratio}`)
-      if (lf?.vocabulary_preference || lf?.dialogue_style) parts.push(`语言：${[lf?.vocabulary_preference, lf?.dialogue_style].filter(Boolean).join('；')}`)
-      if (a?.primary || a?.emotional_tone) parts.push(`氛围：${[a?.primary, a?.emotional_tone].filter(Boolean).join('，')}`)
-    }
-    if (!parts.length) return ''
-    return `${s.id === primaryStyleId ? '【主约束】' : '【辅约束】'}${s.name}\n${parts.join('\n')}`
+    const sections: string[] = [prefix]
+    if (hard.length) sections.push(`🔴 必须遵守（${Math.min(hard.length, 7)}条）：\n${hard.slice(0, 7).join('\n')}`)
+    if (soft.length) sections.push(`🟡 优先遵守（${Math.min(soft.length, 12)}条）：\n${soft.slice(0, 12).join('\n')}`)
+    if (style.length) sections.push(`🔵 风格漂移（${Math.min(style.length, 15)}条）：\n${style.slice(0, 15).join('\n')}`)
+    return sections.join('\n\n')
   }).join('\n')
 }
 
-/** 构建人格库上下文（正文用） — v2 丰富材料池 */
+/** 构建人格库上下文（正文用） — 约束式输出，分三层 */
 function buildPersonalityContext(
   primaryId: number | null, auxIds: number[],
   personalityProjects: PersonalityProject[]
@@ -185,119 +227,32 @@ function buildPersonalityContext(
   const projects = personalityProjects.filter(p => ids.includes(p.id))
   if (!projects.length) return ''
   return projects.map(p => {
-    const d = p.personality_data || {}
-    const parts: string[] = []
-    const add = (label: string, v: string) => { if (v && v.length > 5) parts.push(`${label}：${v.slice(0, 150)}`) }
-    add('【私人意象】', (d as any).private_imagery)
-    add('【情绪怪癖】', (d as any).emotional_quirks)
-    add('【节奏指纹】', (d as any).rhythm_fingerprint)
-    add('【废话风格】', (d as any).nonsense_style)
-    add('【私人修辞】', (d as any).private_rhetoric)
-    if (!parts.length) return ''
-    return `${p.id === primaryId ? '【主人格】' : '【辅人格】'}${p.name}\n${parts.join('\n')}`
+    const d = p.personality_data || {} as any
+    const prefix = `【🧠 人格约束——${p.id === primaryId ? '主' : '辅'}】${p.name}`
+    const soft: string[] = []; const style: string[] = []
+
+    // ── 🟡 软约束（意象+修辞是硬材料池） ──
+    const imgs = extractItems(d.private_imagery, 8)
+    if (imgs.length) soft.push(`- 私人意象（只能用以下，禁止训练数据套路意象）：\n${imgs.map(i => `  · ${i}`).join('\n')}`)
+    const quirks = extractItems(d.emotional_quirks, 5)
+    if (quirks.length) soft.push(`- 情绪怪癖（极端情绪下只能这样反应）：\n${quirks.map(q => `  · ${q}`).join('\n')}`)
+    const rhetorics = extractItems(d.private_rhetoric, 5)
+    if (rhetorics.length) soft.push(`- 私人修辞（比喻必须从以下生长）：\n${rhetorics.map(r => `  · ${r}`).join('\n')}`)
+
+    // ── 🔵 风格漂移 ──
+    const rhythm = extractItems(d.rhythm_fingerprint, 5)
+    if (rhythm.length) style.push(`- 节奏指纹：\n${rhythm.map(r => `  · ${r}`).join('\n')}`)
+    const nonsense = extractItems(d.nonsense_style, 4)
+    if (nonsense.length) style.push(`- 废话风格（允许的叙事者行为）：\n${nonsense.map(n => `  · ${n}`).join('\n')}`)
+
+    const sections: string[] = [prefix]
+    if (soft.length) sections.push(`🟡 优先遵守（${soft.length}条）：\n${soft.join('\n')}`)
+    if (style.length) sections.push(`🔵 风格漂移（${style.length}条）：\n${style.join('\n')}`)
+    return sections.join('\n\n')
   }).join('\n')
 }
 
 /** 卷纲高级字段 — 可折叠展示 */
-function MoreFields({ vol }: { vol: Volume }) {
-  const [show, setShow] = useState(false)
-  return (
-    <div>
-      <button onClick={() => setShow(!show)}
-        className="text-xs text-primary hover:underline">
-        {show ? '▲ 收起详情' : '▼ 展开更多（节奏/伏笔/里程碑/冲突）'}
-      </button>
-      {show && (
-        <div className="mt-2 space-y-2">
-          {vol.word_count_target ? (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">📊 字数目标</p>
-              <p className="text-xs text-text-secondary">{vol.word_count_target.toLocaleString()} 字</p>
-            </div>
-          ) : null}
-          {vol.connection_prev && (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">⬆️ 承上</p>
-              <p className="text-xs text-text-secondary">{vol.connection_prev}</p>
-            </div>
-          )}
-          {vol.connection_next && (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">⬇️ 启下</p>
-              <p className="text-xs text-text-secondary">{vol.connection_next}</p>
-            </div>
-          )}
-          {vol.pacing_design && (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">🎵 节奏设计</p>
-              <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.pacing_design}</p>
-            </div>
-          )}
-          {vol.emotional_cadence && (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情绪节奏</p>
-              <p className="text-xs text-text-secondary">{vol.emotional_cadence}</p>
-            </div>
-          )}
-          {vol.foreshadowing_plant?.length ? (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">🪝 本卷新埋伏笔</p>
-              {vol.foreshadowing_plant.map((fp, i) => (
-                <p key={i} className="text-xs text-text-secondary">• {fp}</p>
-              ))}
-            </div>
-          ) : null}
-          {vol.foreshadowing_payoff?.length ? (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">✅ 本卷回收伏笔</p>
-              {vol.foreshadowing_payoff.map((fp, i) => (
-                <p key={i} className="text-xs text-text-secondary">• {fp}</p>
-              ))}
-            </div>
-          ) : null}
-          {vol.foreshadowing_advance && (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">🔗 伏笔推进</p>
-              <p className="text-xs text-text-secondary">{vol.foreshadowing_advance}</p>
-            </div>
-          )}
-          {vol.foreshadowing && (
-            <div className="text-xs text-text-secondary">
-              <p>🪝 伏笔：{vol.foreshadowing}</p>
-            </div>
-          )}
-          {(vol.foreshadowing_planted?.length || vol.foreshadowing_recovered?.length) ? (
-            <div className="text-xs text-text-secondary">
-              {vol.foreshadowing_planted?.length ? <p>🪝 新埋伏笔：{vol.foreshadowing_planted.join('、')}</p> : null}
-              {vol.foreshadowing_recovered?.length ? <p>✅ 回收伏笔：{vol.foreshadowing_recovered.join('、')}</p> : null}
-            </div>
-          ) : null}
-          {vol.character_milestones?.length ? (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">👤 人物里程碑</p>
-              {vol.character_milestones.map((cm, i) => (
-                <p key={i} className="text-xs text-text-secondary">
-                  {cm.character}: {cm.start_state} → {cm.end_state}（{cm.key_event}）
-                </p>
-              ))}
-            </div>
-          ) : null}
-          {vol.conflict_nodes?.length ? (
-            <div>
-              <p className="text-xs font-medium text-text-secondary mb-0.5">⚔️ 关键冲突节点</p>
-              {vol.conflict_nodes.map((cn, i) => (
-                <p key={i} className="text-xs text-text-secondary">
-                  [{cn.chapter_segment}] {cn.description}（{cn.escalation_type}）
-                </p>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export default function Workspace() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -307,6 +262,7 @@ export default function Workspace() {
   const [loaded, setLoaded] = useState(false)
   const [prepareContent, setPrepareContent] = useState('')
   const [outlineContent, setOutlineContent] = useState('')
+  const [outlineVersion, setOutlineVersion] = useState(1)
   const [volumes, setVolumes] = useState<Volume[]>([])
   const [chapterPlans, setChapterPlans] = useState<ChapterPlan[]>([])
   const [chapters, setChapters] = useState<Chapter[]>([])
@@ -321,12 +277,21 @@ export default function Workspace() {
   const [saving, setSaving] = useState(false)
   const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'settings' | 'review' | 'foreshadowing' | 'timeline'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
-  const [reviewResult, setReviewResult] = useState<{ overall_report: string; chapter_fixes: ChapterFix[] } | null>(null)
-  const [reviewing, setReviewing] = useState(false)
+  // ── 叙事控制台 v2 state ──
+  const [lastCheckResult, setLastCheckResult] = useState<CheckResult | null>(null)
+  const [lastEventData, setLastEventData] = useState<EventExtractionResult | null>(null)
+  const [lastLeakScore, setLastLeakScore] = useState<NormalizedLeakScore | null>(null)
+  const [calibrationStats, setCalibrationStats] = useState<{ chapters: number; mean: number; std: number } | null>(null)
+  const [narrativeReport, setNarrativeReport] = useState<{
+    narrative_state: string; pacing: string; characters: string; risk: string
+    suggested_actions: { text: string; target_chapter: number | null; executable: false }[]
+  } | null>(null)
+  const [narrativeReportLoading, setNarrativeReportLoading] = useState(false)
   const [fixingChapter, setFixingChapter] = useState<number | null>(null)
+  const [fullscreenEdit, setFullscreenEdit] = useState<{ title: string; content: string; onSave: (c: string) => void } | null>(null)
   const [fixPreview, setFixPreview] = useState<{ chapterNum: number; original: string; modified: string; skipped: string[] } | null>(null)
-  const [editingFixPrompt, setEditingFixPrompt] = useState<number | null>(null)
-  const [editFixPromptText, setEditFixPromptText] = useState('')
+  const [showMarks, setShowMarks] = useState(false)
+  const [markData, setMarkData] = useState<{ scores: ParagraphScore[]; selected: Set<number> } | null>(null)
 
   // 引用 — 大纲/卷纲用：拆文库 + 设定库
   const [primaryDissId, setPrimaryDissId] = useState<number | null>(null)
@@ -351,10 +316,11 @@ export default function Workspace() {
   const cancelledRef = useRef(false)
   const generatingRef = useRef(false)
   const reviewingRef = useRef(false)
+  const narrativeReportLoadingRef = useRef(false)
 
   // 同步 ref
   useEffect(() => { generatingRef.current = generating }, [generating])
-  useEffect(() => { reviewingRef.current = reviewing }, [reviewing])
+  useEffect(() => { narrativeReportLoadingRef.current = narrativeReportLoading }, [narrativeReportLoading])
   const cancelStreamRef = useRef<(() => void) | null>(null)
 
   const handleCancel = () => {
@@ -376,8 +342,8 @@ export default function Workspace() {
       const prep = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`prepare_${id}`])
       if (prep) setPrepareContent(prep.value)
 
-      const outl = await window.electronAPI.db.get('SELECT content FROM outlines WHERE project_id = ?', [Number(id)])
-      if (outl) setOutlineContent(outl.content)
+      const outl = await window.electronAPI.db.get('SELECT content, version FROM outlines WHERE project_id = ?', [Number(id)])
+      if (outl) { setOutlineContent(outl.content); setOutlineVersion(outl.version || 1) }
 
       // 加载卷纲
       const volRow = await window.electronAPI.db.get("SELECT value FROM settings WHERE key = ?", [`volumes_${id}`])
@@ -420,7 +386,7 @@ export default function Workspace() {
   // 离开工作台时自动取消正在运行的生成（不弹toast，由catch处理）
   useEffect(() => {
     return () => {
-      if (generatingRef.current || reviewingRef.current) {
+      if (generatingRef.current || narrativeReportLoadingRef.current) {
         cancelledRef.current = true
         window.electronAPI?.cancelAi()
       }
@@ -450,10 +416,13 @@ export default function Workspace() {
   const saveOutline = async (content: string) => {
     if (!window.electronAPI) return
     const ex = await window.electronAPI.db.get('SELECT id FROM outlines WHERE project_id=?', [Number(id)])
+    const newVersion = outlineVersion + 1
     ex
-      ? await window.electronAPI.db.run("UPDATE outlines SET content=?, updated_at=datetime('now','localtime') WHERE project_id=?", [content, Number(id)])
-      : await window.electronAPI.db.run('INSERT INTO outlines (project_id,content) VALUES (?,?)', [Number(id), content])
+      ? await window.electronAPI.db.run("UPDATE outlines SET content=?, version=?, updated_at=datetime('now','localtime') WHERE project_id=?", [content, newVersion, Number(id)])
+      : await window.electronAPI.db.run('INSERT INTO outlines (project_id,content,version) VALUES (?,?,?)', [Number(id), content, 1])
     setOutlineContent(content)
+    setOutlineVersion(newVersion)
+    showToast('success', `大纲已保存 (v${newVersion})`)
   }
 
   const saveVolumes = async (vols: Volume[]) => {
@@ -469,6 +438,18 @@ export default function Workspace() {
       ? await window.electronAPI.db.run("UPDATE detailed_outlines SET chapters=?, updated_at=datetime('now','localtime') WHERE project_id=?", [JSON.stringify(plans), Number(id)])
       : await window.electronAPI.db.run('INSERT INTO detailed_outlines (project_id,chapters) VALUES (?,?)', [Number(id), JSON.stringify(plans)])
     setChapterPlans(plans)
+  }
+
+  /** 卷纲字段编辑 */
+  const updateVolume = (volNum: number, field: string, value: string) => {
+    const updated = volumes.map(v => v.volume_number === volNum ? { ...v, [field]: value, version: (v.version || 1) + 1 } : v)
+    saveVolumes(updated)
+  }
+
+  /** 细纲字段编辑 */
+  const updateChapterPlan = (chapNum: number, field: string, value: any) => {
+    const updated = chapterPlans.map(p => p.chapter_number === chapNum ? { ...p, [field]: value, plan_version: (p.plan_version || 1) + 1 } : p)
+    saveChapterPlans(updated)
   }
 
   const updateContext = async (chapNum: number, newContent: string) => {
@@ -541,7 +522,8 @@ export default function Workspace() {
         ? { disassemblyContext: buildDisassemblyContext(config.primaryDissId, config.auxDissIds, disassemblies),
             settingLibContext: buildSettingContext(config.primarySettingLibId, config.auxSettingLibIds, settingLibraries) }
         : await getRefs()
-      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, '', disassemblyContext, settingLibContext || undefined)
+      const outlinePersonality = buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
+      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, '', disassemblyContext, settingLibContext || undefined, outlinePersonality || undefined)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
@@ -632,12 +614,12 @@ export default function Workspace() {
         const fsItems = await window.electronAPI!.db.query(
           `SELECT foreshadow_id, description, status, priority, planted_chapter, target_chapter
            FROM foreshadowing_registry
-           WHERE project_id = ? AND status IN ('planted','buried','planned')
+           WHERE project_id = ? AND status IN ('pending','active')
            ORDER BY priority DESC, target_chapter ASC`,
           [Number(id)]
         )
         if (fsItems.length > 0) {
-          const statusLabels: Record<string, string> = { planted: '已埋', buried: '已加固', planned: '计划中' }
+          const statusLabels: Record<string, string> = { pending: '待埋', active: '已埋' }
           const statusLines = fsItems.map((f: any) =>
             `- [${statusLabels[f.status] || f.status}|${f.priority}] ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter || '?'}章)`
           )
@@ -664,12 +646,24 @@ export default function Workspace() {
         } catch { /* chapter_summaries 可能尚无数据 */ }
       }
 
+      // 查询4: 时间线当前位置
+      let timelineContext: { current_day: number } | undefined
+      try {
+        const dayRow = await window.electronAPI!.db.get(
+          "SELECT MAX(absolute_day) as max_day FROM story_timeline WHERE project_id = ?",
+          [Number(id)]
+        )
+        if (dayRow && dayRow.max_day != null) {
+          timelineContext = { current_day: dayRow.max_day }
+        }
+      } catch { /* story_timeline 可能为空 */ }
+
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: VOLUME_OUTLINE_SYSTEM },
         { role: 'user', content: VOLUME_OUTLINE_USER(
           enrichedOutline, total, nextVolNum, prevVolContext, prevChapterPlansStr,
-          canonFactsContext, foreshadowingStatus, prevVolOutcomes
+          canonFactsContext, foreshadowingStatus, prevVolOutcomes, timelineContext
         ) },
       ], '卷纲生成')
       if (cancelledRef.current) return
@@ -705,9 +699,33 @@ export default function Workspace() {
         foreshadowing_advance: vol.foreshadowing_advance,
         character_milestones: vol.character_milestones,
         conflict_nodes: vol.conflict_nodes,
+        nodes: vol.nodes,
+        cool_density: vol.cool_density,
+        golden_five: vol.golden_five,
+        timeline_context: vol.timeline_context,
+        outline_version: outlineVersion,
+        version: 1,
       }
       const newVols = [...volumes, newVol]
       await saveVolumes(newVols)
+
+      // 将卷纲规划的伏笔写入 foreshadowing_registry
+      if (vol.foreshadowing_plant && vol.foreshadowing_plant.length > 0) {
+        try {
+          for (let fi = 0; fi < vol.foreshadowing_plant.length; fi++) {
+            const fDesc = typeof vol.foreshadowing_plant[fi] === 'string'
+              ? vol.foreshadowing_plant[fi]
+              : vol.foreshadowing_plant[fi]?.desc || vol.foreshadowing_plant[fi]?.description || String(vol.foreshadowing_plant[fi])
+            const fId = `V${nextVolNum}-${fi + 1}`
+            await window.electronAPI!.db.run(
+              `INSERT OR IGNORE INTO foreshadowing_registry (project_id, foreshadow_id, description, status, priority, planted_chapter, target_chapter)
+               VALUES (?, ?, ?, 'pending', 'normal', ?, ?)`,
+              [Number(id), fId, fDesc, vol.chapter_range?.[0] || null, vol.chapter_range?.[1] || null]
+            )
+          }
+        } catch { /* 伏笔入库失败不阻塞 */ }
+      }
+
       showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成`)
     } catch (e: any) {
       if (cancelledRef.current) showToast('info', '已取消生成')
@@ -738,15 +756,22 @@ export default function Workspace() {
 章节范围：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`
 
       const prevContentExcerpt = prevChapter?.content
-        ? `\n【上一章正文结尾（${prevChapter.content.length}字）】\n${prevChapter.content.slice(-400)}\n（请根据以上结尾内容，确保本章细纲的起点和上一章实际结尾衔接流畅）`
+        ? `\n【上一章正文结尾（${prevChapter.content.length}字）】\n${prevChapter.content.slice(-400)}\n（确保本章起点和上章结尾衔接）`
         : ''
+
+      // 上一章的情节点序列用于因果衔接
+      const prevBeatsContext = prevPlan?.plot_beats?.length
+        ? `\n【上一章情节点序列（最后3条）】\n${prevPlan.plot_beats.slice(-3).map((b, i) => `${prevPlan.plot_beats!.length - 3 + i + 1}. ${b}`).join('\n')}`
+        : prevPlan?.key_events?.length
+          ? `\n【上一章关键事件】${prevPlan.key_events.join('；')}`
+          : ''
 
       const prevContext = isFirstChapterInBook
         ? '（全书第一章，无前章）'
         : isFirstChapterInVol
           ? `（本卷第一章，请基于大纲和卷纲直接设计开篇，不需要依赖前一章细纲）${prevContentExcerpt}`
           : prevPlan
-            ? `【上一章细纲】第${prevPlan.chapter_number}章 ${prevPlan.title}\n概要：${prevPlan.summary}\n人物：${prevPlan.characters.join('、')}\n事件：${prevPlan.key_events.join('、')}${prevContentExcerpt}`
+            ? `【上一章】第${prevPlan.chapter_number}章 ${prevPlan.title}${prevBeatsContext}${prevContentExcerpt}`
             : `（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）${prevContentExcerpt}`
 
       const promptParts = [
@@ -757,35 +782,61 @@ export default function Workspace() {
         disassemblyContext ? '【拆文】\n' + disassemblyContext.slice(0, 1000) : '',
       ].filter(Boolean)
 
+      const chapterTypeHint = isFirstChapterInBook
+        ? '这是全书第一章（黄金首章），需要：强力钩子+快速建立主角+展示核心冲突。'
+        : isFirstChapterInVol
+          ? '这是新一卷的开篇章节，需要：新卷氛围建立+承上启下的过渡+保持读者期待。'
+          : '请基于上一章情节点序列的结尾，连贯设计本章的情节点，确保因果衔接。'
+
       const reply = await window.electronAPI.aiChat([
         {
           role: 'system',
-          content: `你是章节细纲规划师。只规划第 ${chapNum} 章。${isFirstChapterInBook ? '这是全书第一章（黄金首章），需要：强力钩子+快速建立主角+展示核心冲突。' : isFirstChapterInVol ? '这是新一卷的开篇章节，需要：新卷氛围建立+承上启下的过渡+保持读者期待。' : '请基于上一章细纲连贯设计本章。'}一章的细纲包含字段：chapter_number(数字)、title(章节标题5-15字)、function(功能标签：🎣钩子/⚡爽点/📖展开/💡转折/🌿支线/🏗建立/🌊过渡)、summary(内容概要50-100字)、characters(出场人物数组)、key_events(关键事件数组2-4个)、emotional_goal(情绪目标简短描述)、estimated_words(预估字数数字)、ending_type(结尾类型：悬念/爽点释放/情感余味/自然过渡)。输出严格的JSON对象，不要数组，不要markdown代码块。`
+          content: `你是章节细纲规划师。只规划第 ${chapNum} 章。${chapterTypeHint}
+
+## 情节点序列（plot_beats）是核心
+输出 8-15 条情节点，每条是一个具体的、可被 AI 直接写出来的动作或事件。
+- 因果关系链：上一条触发下一条，不跳跃
+- 具体：写"凌瑶在旧代码堆中找到一扇代码门——凌寒山写的"，不写"两人找到了入口"
+- 时序明确：情节点按时间顺序排列
+
+## 钩子设计
+- opening_hook：如何在前100字抓住读者。type: 倒计时式|悬念式|动作式|对话式|场景反转式
+- closing_hook：如何让读者想翻下一章。type: 空间转换式|信息揭秘式|情绪悬念式|动作中断式。impact: 强|中|弱
+
+## 情绪弧线（emotional_arc）
+情绪在章节内的变化轨迹。格式：起始情绪→中间转折→章尾情绪（如"紧张→刺激→敬畏"）
+
+## 约束与禁区（这是最重要的字段）
+- **forbidden**：本章绝对禁止出现的剧情内容（3-5条）。告诉AI"只能写到这里，不能碰这些"。格式："禁止：XXX在本章被揭露/确认/出现"
+- **scene_count**：本章场景数（2-4个）
+- **max_info_reveal**：本章允许推进的最大信息量（如"世界观公开度从15%→20%，禁止超过25%"）
+- **emotion_cap**：感情线数值上限（如"阶段2/10，本章最多到2.5，禁止肢体接触/表白"）
+
+## 输出 JSON 对象
+{ "chapter_number": ${chapNum}, "title": "标题5-15字", "core_event": "核心事件一句话", "plot_beats": ["情节点", ...], "emotional_arc": "情绪A→情绪B→情绪C", "opening_hook": {"type":"倒计时式","detail":"..."}, "closing_hook": {"type":"空间转换式","impact":"强"}, "forbidden": ["禁止揭露XX","禁止引入XX"], "scene_count": 3, "max_info_reveal": "世界观公开度从15%→20%", "emotion_cap": "感情阶段2/10，本章最多到2.5", "estimated_words": 3000 }
+输出严格的JSON对象，不要数组，不要markdown代码块。`
         },
         { role: 'user', content: promptParts.join('\n\n') + `\n\n请输出第 ${chapNum} 章的细纲JSON对象。` },
       ], `细纲-第${chapNum}章`)
 
       if (cancelledRef.current) return
-      // 尝试多种方式提取 JSON
       let newPlan: ChapterPlan
       try {
         const jm = reply.match(/\{[\s\S]*\}/)
         newPlan = JSON.parse(jm ? jm[0] : reply)
       } catch {
-        // 如果AI没返回有效JSON，创建一个基础细纲
         newPlan = {
           chapter_number: chapNum,
           title: `第${chapNum}章`,
-          summary: reply.slice(0, 200),
-          characters: [],
-          key_events: [],
+          core_event: reply.slice(0, 100),
+          plot_beats: [],
+          emotional_arc: '',
           estimated_words: 3000,
-          emotional_goal: '',
-          function: '📖 展开',
-          ending_type: '自然收尾',
         }
       }
       newPlan.chapter_number = chapNum
+      newPlan.volume_version = (volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1]) || {} as any).version || 1
+      newPlan.plan_version = 1
 
       const merged = chapterPlans.filter(p => p.chapter_number !== chapNum)
       merged.push(newPlan)
@@ -833,6 +884,7 @@ export default function Workspace() {
 
       // 事实簿（硬规则注入）
       let canonFactsContext = ''
+      let infoPermissionContext = ''
       try {
         const hardFacts = await window.electronAPI.db.query(
           'SELECT fact_category, fact_key, fact_value FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1',
@@ -842,6 +894,29 @@ export default function Workspace() {
           canonFactsContext = hardFacts.map((f: any) =>
             `- [${f.fact_category}] ${f.fact_key}: ${f.fact_value}`
           ).join('\n')
+        }
+        // 公开度分级注入
+        const allFactsWithLevel = await window.electronAPI.db.query(
+          'SELECT fact_key, fact_value, fact_category, revealed_level, dependencies FROM canon_facts WHERE project_id = ? AND revealed_level < 100',
+          [Number(id)]
+        )
+        if (allFactsWithLevel.length > 0) {
+          const forbidden: string[] = []   // revealed_level = 0 的完全禁止
+          const limited: string[] = []     // revealed_level < 50 的部分限制
+          for (const f of allFactsWithLevel) {
+            const lv = f.revealed_level || 0
+            const deps = (() => { try { return JSON.parse(f.dependencies || '[]') } catch { return [] } })()
+            if (lv === 0) {
+              forbidden.push(`禁止揭示：${f.fact_key}（${f.fact_value}）`)
+            } else if (lv < 50) {
+              limited.push(`${f.fact_key}（公开度${lv}%，可适度推进但禁止完全揭示）`)
+            }
+          }
+          if (forbidden.length + limited.length > 0) {
+            infoPermissionContext = '【🔐 信息权限——以下设定尚未公开或仅部分公开】\n'
+            if (forbidden.length) infoPermissionContext += '⛔ 完全未公开（本章禁止揭示）：\n' + forbidden.map(s => `  ${s}`).join('\n') + '\n'
+            if (limited.length) infoPermissionContext += '⚠️ 部分公开（可推进但禁止完全揭示）：\n' + limited.map(s => `  ${s}`).join('\n')
+          }
         }
       } catch {}
 
@@ -856,11 +931,13 @@ export default function Workspace() {
 
       // 生成前一致性检查清单
       let consistencyChecklist = ''
+      let timelineCheck = ''; let stateContext = ''; let stateDrift = 0.03
+      let narrativeMode: ReturnType<typeof selectMode> = 'stable'
       try {
         const checklist: string[] = []
         const urgentFS = await window.electronAPI.db.query(
           `SELECT foreshadow_id, description, target_chapter FROM foreshadowing_registry
-           WHERE project_id = ? AND status IN ('planted','buried') AND target_chapter <= ?`,
+           WHERE project_id = ? AND status = 'active' AND target_chapter <= ?`,
           [Number(id), chapNum + 3]
         )
         if (urgentFS.length > 0) {
@@ -889,19 +966,81 @@ export default function Workspace() {
             }
           }
         }
+        // 时间线上下文 + 叙事状态聚合
+        let dayRow: any = null
+        try {
+          dayRow = await window.electronAPI.db.get(
+            "SELECT MAX(absolute_day) as cur_day, timeline_id FROM story_timeline WHERE project_id = ? GROUP BY timeline_id ORDER BY timeline_id",
+            [Number(id)]
+          )
+          if (dayRow) {
+            timelineCheck = `【⏱ 时间线上下文】当前主线第${dayRow.cur_day || 0}天。如果本章包含闪回/并行时间线，切换时用明确的时间标记（如"三年前""同一时刻，XX城"），闪回段不超过500字。`
+          }
+          // 叙事状态聚合
+          const rlRows = await window.electronAPI.db.query(
+            "SELECT fact_key, revealed_level FROM canon_facts WHERE project_id = ? AND revealed_level IS NOT NULL",
+            [Number(id)]
+          )
+          const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+          const es = (vol as any)?.emotion_stage
+          const currentDay = parseInt(dayRow?.cur_day || '0')
+          // v2.3: 冲突 + 漂移数据
+          let activeConflicts = 0; let speculativeCount = 0; let avgStability = 0.5
+          let conflictItems: any[] = []
+          try {
+            conflictItems = await window.electronAPI!.db.query(
+              "SELECT * FROM conflict_facts WHERE project_id = ? AND resolution_status IN ('unresolved','permanent')",
+              [Number(id)]
+            )
+            activeConflicts = conflictItems.length
+            const allFacts = await window.electronAPI!.db.query(
+              "SELECT details FROM canon_facts WHERE project_id = ? AND details IS NOT NULL AND details != ''",
+              [Number(id)]
+            )
+            let tvSum = 0; let tvCount = 0
+            for (const f of allFacts) {
+              let d: any = {}
+              try { d = JSON.parse(f.details || '{}') } catch {}
+              if (typeof d.truth_value === 'number') { tvSum += d.truth_value; tvCount++ }
+              if (d.truth_value < 0.4) speculativeCount++
+            }
+            avgStability = tvCount > 0 ? tvSum / tvCount : 0.5
+          } catch { /* advisory */ }
+          stateDrift = computeStateDrift(activeConflicts, speculativeCount, avgStability)
+
+          // v2.5: 叙事模式选择
+          const curVol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+          const totalInVol = curVol ? curVol.chapter_range[1] - curVol.chapter_range[0] + 1 : 1
+          const chapterInVol = curVol ? chapNum - curVol.chapter_range[0] + 1 : 1
+          narrativeMode = selectMode(chapterInVol, totalInVol, activeConflicts, stateDrift)
+          const effectiveDrift = stateDrift + modeDriftBonus(narrativeMode)
+
+          stateContext = buildStateContext(
+            rlRows, es, currentDay,
+            plan.allowed_reveal, plan.emotion_cap,
+            conflictItems.map((c: any) => ({ a: c.fact_a_text, b: c.fact_b_text, type: c.conflict_type, status: c.resolution_status })),
+            effectiveDrift, speculativeCount, avgStability,
+            narrativeMode,
+          )
+        } catch {}
+
         if (checklist.length > 0) {
           consistencyChecklist = '⚠️ 生成前一致性检查清单（请逐条确认本章不违反）：\n' + checklist.join('\n')
+          consistencyChecklist = '⚠️ 生成前一致性检查清单（请逐条确认本章不违反）：\n' + checklist.join('\n')
         }
+        if (timelineCheck) consistencyChecklist = (consistencyChecklist ? consistencyChecklist + '\n\n' : '') + timelineCheck
       } catch {}
 
       const planAny = plan as any
-      let userPrompt = CHAPTER_USER(
+      let userPrompt = (stateContext ? stateContext + '\n\n' : '') + CHAPTER_USER(
         project.title, prepareContent.slice(0, 500), chapNum, plan.title,
-        plan.summary, plan.characters, plan.key_events, plan.estimated_words || 3000,
-        planAny.emotional_goal || '', planAny.function || '', planAny.ending_type || '自然收尾',
+        plan.summary || '', plan.characters || [], plan.key_events || [], plan.estimated_words || 3000,
+        planAny.emotional_goal || planAny.emotional_arc || '', planAny.function || '', planAny.ending_type || '自然收尾',
         styleContext, plotSummary, prevExcerpt,
         (volContext + '\n\n' + prevSummaryContext),
-        canonFactsContext, personalityContext
+        canonFactsContext, personalityContext,
+        plan.plot_beats, plan.emotional_arc, plan.cool_moment,
+        plan.forbidden, plan.scene_count, plan.max_info_reveal, plan.emotion_cap
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
         + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
 
@@ -919,7 +1058,7 @@ export default function Workspace() {
           return { name: f.fact_key, description: f.fact_value, is_global: d.is_global ? 1 : 0, trigger_keywords: d.trigger_keywords || '' }
         })
         const { charContext: mcChar, worldContext: mcWorld, tokenEstimate: mcTokens } = buildMinimalContext(
-          chapNum, plan.characters, allChars, allWorlds, recentText
+          chapNum, plan.characters || [], allChars, allWorlds, recentText
         )
         let ctxParts: string[] = []
         if (mcChar) ctxParts.push(`【👤 角色上下文】\n${mcChar}`)
@@ -966,80 +1105,347 @@ export default function Workspace() {
       await updateContext(chapNum, finalText)
       showToast('success', `第${chapNum}章生成完成`)
 
-      // 自动生成章节摘要（记录官）— 后台静默，不阻塞 UI
+      // ── v2.2 记录官 + 事件提取器 + Checker(含语义泄露评分) + 语义快照重写 + State 统一写入 ──
       ;(async () => {
+        const pid = Number(id)
+        const currentChapterText = finalText
         try {
-          const summaryReply = await window.electronAPI!.aiChat([
-            { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
-            { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, finalText, outlineContent) },
-          ], '章节摘要')
-          const jm = summaryReply.match(/\{[\s\S]*\}/)
-          if (jm) {
-            const s = JSON.parse(jm[0])
-            const prevSum = await window.electronAPI!.db.get('SELECT id FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
-            const data = [
-              s.summary || '', JSON.stringify(s.characters_appeared || []), JSON.stringify(s.locations || []),
-              JSON.stringify(s.key_events || []), JSON.stringify(s.foreshadowing_planted || []),
-              JSON.stringify(s.foreshadowing_recovered || []), JSON.stringify(s.character_changes || {}),
-              JSON.stringify(s.world_changes || {}),
-            ]
-            if (prevSum) {
-              await window.electronAPI!.db.run(
-                `UPDATE chapter_summaries SET summary=?,characters_appeared=?,locations=?,key_events=?,foreshadowing_planted=?,foreshadowing_recovered=?,character_changes=?,world_changes=? WHERE project_id=? AND chapter_number=?`,
-                [...data, Number(id), chapNum]
-              )
-            } else {
-              await window.electronAPI!.db.run(
-                `INSERT INTO chapter_summaries (project_id,chapter_number,summary,characters_appeared,locations,key_events,foreshadowing_planted,foreshadowing_recovered,character_changes,world_changes) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-                [Number(id), chapNum, ...data]
-              )
+          // 1. 并行调用：记录官（人类可读摘要+伏笔+ai_concerns）+ 事件提取器（结构化事件）
+          const [summaryReply, eventReply] = await Promise.all([
+            window.electronAPI!.aiChat([
+              { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
+              { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, currentChapterText, outlineContent) },
+            ], '章节摘要'),
+            window.electronAPI!.aiChat([
+              { role: 'system', content: EVENT_EXTRACTION_SYSTEM },
+              { role: 'user', content: EVENT_EXTRACTION_USER(chapNum, plan.title, currentChapterText, outlineContent, plan.characters || []) },
+            ], '事件提取'),
+          ])
+
+          let s: any = null
+          const sjm = summaryReply.match(/\{[\s\S]*\}/)
+          if (sjm) s = JSON.parse(sjm[0])
+
+          let extractedEvents: any = null
+          const ejm = eventReply.match(/\{[\s\S]*\}/)
+          if (ejm) extractedEvents = JSON.parse(ejm[0])
+
+          // 2. 获取时间线历史和 facts（供 checker 和 snapshot 使用）
+          let timelineHistory: any[] = []
+          let allFacts: any[] = []
+          let currentAbsoluteDay: number | null = null
+          try {
+            const [th, af, dayRow] = await Promise.all([
+              window.electronAPI!.db.query('SELECT * FROM story_timeline WHERE project_id = ? ORDER BY absolute_day ASC', [pid]),
+              window.electronAPI!.db.query('SELECT * FROM canon_facts WHERE project_id = ?', [pid]),
+              window.electronAPI!.db.get('SELECT MAX(absolute_day) as d FROM story_timeline WHERE project_id = ?', [pid]),
+            ])
+            timelineHistory = th; allFacts = af
+            currentAbsoluteDay = dayRow?.d || null
+          } catch { /* advisory */ }
+
+          // 3. Checker（① deterministic + ② structural + ③ semantic leak scorer, projectId for calibration）
+          const checkResult = checkChapter(
+            currentChapterText, plan, allFacts, timelineHistory,
+            currentAbsoluteDay, pid,
+            undefined, undefined, stateDrift, narrativeMode,
+          )
+
+          // 4. 收集 AI concerns（记录官的 ai_concerns + leak score elevated）
+          if (s?.ai_concerns && Array.isArray(s.ai_concerns) && s.ai_concerns.length > 0) {
+            checkResult.concerns = [...checkResult.concerns, ...s.ai_concerns]
+          }
+
+          // 4.5. 存储 checker/event 数据到 state（供 ReviewPanel 控制台消费）
+          setLastCheckResult(checkResult)
+          if (checkResult.leakScore) setLastLeakScore(checkResult.leakScore)
+          if (extractedEvents?.events) setLastEventData(extractedEvents as EventExtractionResult)
+          setCalibrationStats(getCalibrationStats(pid))
+
+          // 5. 构建角色名列表（供语义快照使用）
+          const charNames = allFacts
+            .filter((f: any) => f.fact_category === 'character')
+            .map((f: any) => f.fact_key)
+
+          // 6. Rewrite Loop（熔断 + 语义 diff）
+          let activeText = currentChapterText
+          let rewriteCount = 0
+          const { maxRetries, entropyLimit } = DEFAULT_REWRITE_LIMIT
+
+          // 建立语义快照（首次 rewrite 前）
+          let snapshot = takeSnapshot(activeText, chapNum, charNames)
+
+          while (checkResult.hardViolationCount > 0 && rewriteCount <= maxRetries) {
+            if (cancelledRef.current) break
+
+            if (rewriteCount >= maxRetries) {
+              const marks = checkResult.violations
+                .filter(v => v.source !== 'ai_suggestion')
+                .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
+                .join('\n')
+              activeText = marks + '\n' + activeText
+              showToast('info', `约束重写${maxRetries}次仍未解决，已标记违规段落供人工处理`)
+              break
             }
-            // 同步伏笔注册表
-            const pid = Number(id)
-            const planted: string[] = Array.isArray(s.foreshadowing_planted) ? s.foreshadowing_planted : []
-            for (let fi = 0; fi < planted.length; fi++) {
-              const nextId = `F${String(chapNum).padStart(3,'0')}-${fi+1}`
-              await window.electronAPI!.db.run(
-                `INSERT OR IGNORE INTO foreshadowing_registry (project_id,foreshadow_id,description,status,planted_chapter) VALUES (?,?,?,?,?)`,
-                [pid, nextId, planted[fi], 'planted', chapNum]
-              )
-            }
-            const recovered: string[] = Array.isArray(s.foreshadowing_recovered) ? s.foreshadowing_recovered : []
-            for (const recDesc of recovered) {
-              await window.electronAPI!.db.run(
-                `UPDATE foreshadowing_registry SET status='resolved',resolved_chapter=?,updated_at=datetime('now','localtime') WHERE project_id=? AND description LIKE ? AND status!='resolved'`,
-                [chapNum, pid, `%${recDesc.slice(0, 20)}%`]
-              )
-            }
-            // 同步时间线
-            const keyEvents: string[] = Array.isArray(s.key_events) ? s.key_events : []
-            const timeLabels: string[] = Array.isArray(s.time_labels) ? s.time_labels : []
-            for (let ei = 0; ei < keyEvents.length; ei++) {
-              await window.electronAPI!.db.run(
-                `INSERT INTO story_timeline (project_id,chapter_number,event_order,event_description,time_label,location,characters_involved,is_major) VALUES (?,?,?,?,?,?,?,?)`,
-                [pid, chapNum, ei, keyEvents[ei], timeLabels[0] || '', Array.isArray(s.locations) ? s.locations[0] || '' : '', JSON.stringify(Array.isArray(s.characters_appeared) ? s.characters_appeared : []), ei === 0 ? 1 : 0]
-              )
-            }
-            // 同步角色成长
-            const charChanges: Record<string, string> = s.character_changes || {}
-            for (const [cname, desc] of Object.entries(charChanges)) {
-              await window.electronAPI!.db.run(
-                `INSERT INTO character_arc_log (project_id,character_name,chapter_number,change_type,change_description,before_state) VALUES (?,?,?,'development',?,'')`,
-                [pid, cname, chapNum, String(desc)]
-              )
-            }
-            // 同步关系演变
-            const relChanges: any[] = Array.isArray(s.relationship_changes) ? s.relationship_changes : []
-            for (const rc of relChanges) {
-              if (rc.char_a && rc.char_b && rc.change) {
-                await window.electronAPI!.db.run(
-                  `INSERT INTO relationship_timeline (project_id,char_a,char_b,chapter_number,relation_type,change_description) VALUES (?,?,?,?,?,?)`,
-                  [pid, rc.char_a, rc.char_b, chapNum, rc.type || 'ally', rc.change]
-                )
+
+            showToast('info', `硬约束违规 ${checkResult.hardViolationCount} 处，自动重写 (${rewriteCount + 1}/${maxRetries})...`)
+
+            try {
+              const rewritePrompt = buildRewritePrompt(activeText, checkResult.violations, snapshot)
+              const rewriteMsg = [
+                { role: 'system' as const, content: '你是小说修改助手。按指令精准修改文本，只改违规部分。' },
+                { role: 'user' as const, content: `原文：\n${activeText.slice(0, 6000)}\n\n${rewritePrompt}` },
+              ]
+              const rewritten = await window.electronAPI!.aiChat(rewriteMsg, '违规重写')
+
+              if (!rewritten || cancelledRef.current) break
+
+              // 语义 diff：检测重写是否改变了不该变的段落
+              const diff = diffSnapshot(snapshot, rewritten, charNames)
+              if (!diff.isStable || diff.semanticChangeRatio > 0.35) {
+                const marks = checkResult.violations
+                  .filter(v => v.source !== 'ai_suggestion')
+                  .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
+                  .join('\n')
+                activeText = marks + '\n' + activeText
+                showToast('info', `重写语义漂移过大（${Math.round(diff.semanticChangeRatio * 100)}%），保留原文并标记`)
+                break
               }
+
+              // 传统 infoLoss 检查（与语义 diff 互补）
+              const infoLoss = calcInfoLoss(activeText, rewritten)
+              if (infoLoss > entropyLimit) {
+                const marks = checkResult.violations
+                  .filter(v => v.source !== 'ai_suggestion')
+                  .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
+                  .join('\n')
+                activeText = marks + '\n' + activeText
+                showToast('info', `重写信息损失 ${Math.round(infoLoss * 100)}% 超限，保留原文并标记`)
+                break
+              }
+
+              // 重写后复查
+              const reCheck = checkChapter(
+                rewritten, plan, allFacts, timelineHistory,
+                currentAbsoluteDay, pid,
+                undefined, undefined, stateDrift, narrativeMode,
+              )
+              if (reCheck.hardViolationCount === 0) {
+                activeText = rewritten
+                snapshot = takeSnapshot(rewritten, chapNum, charNames) // 更新快照
+                setEditingContent(rewritten)
+                await saveChapter(chapNum, plan.title, rewritten)
+                showToast('success', '违规已修复，已保存重写版本')
+                break
+              }
+
+              activeText = rewritten
+              snapshot = takeSnapshot(rewritten, chapNum, charNames)
+              checkResult.violations = reCheck.violations
+              checkResult.hardViolationCount = reCheck.hardViolationCount
+              if (reCheck.leakScore) checkResult.leakScore = reCheck.leakScore
+              rewriteCount++
+            } catch {
+              showToast('info', '重写调用失败，保留原文')
+              break
             }
           }
-        } catch { /* 摘要失败不阻塞 */ }
+
+          if (rewriteCount > 0 && checkResult.hardViolationCount === 0) {
+            setEditingContent(activeText)
+            await saveChapter(chapNum, plan.title, activeText)
+          }
+
+          // 7. 从事件提取器 + 记录官伏笔数据构建 StatePatch（事件驱动，非 LLM 总结驱动）
+          try {
+            const planted: any[] = Array.isArray(s?.foreshadowing_planted) ? s.foreshadowing_planted : []
+            const recovered: any[] = Array.isArray(s?.foreshadowing_recovered) ? s.foreshadowing_recovered : []
+
+            const foreshadowingPlanted = planted.map((item: any, fi: number) => ({
+              id: typeof item === 'string' ? `F${String(chapNum).padStart(3, '0')}-${fi + 1}` : (item.id || `F${String(chapNum).padStart(3, '0')}-${fi + 1}`),
+              desc: typeof item === 'string' ? item : (item.desc || item.description || ''),
+            })).filter((p: any) => p.desc)
+
+            const foreshadowingRecovered = recovered.map((item: any) => ({
+              id: typeof item === 'string' ? null : (item.id || null),
+              desc: typeof item === 'string' ? item : (item.desc || item.description || ''),
+            })).filter((p: any) => p.desc || p.id)
+
+            // 如果事件提取器成功，从事件构建 StatePatch；否则回退到旧 buildPatch
+            const events = extractedEvents?.events || []
+            const patch = events.length > 0
+              ? buildStatePatchFromEvents(events, chapNum, foreshadowingPlanted, foreshadowingRecovered, checkResult.concerns)
+              : (() => {
+                // 回退：从记录官数据手动构建
+                const absDay = (s as any)?.absolute_day || null
+                const keyEvents: string[] = Array.isArray(s?.key_events) ? s.key_events : []
+                const timeLabels: string[] = Array.isArray(s?.time_labels) ? s.time_labels : []
+                return {
+                  summary: {
+                    chapter_number: chapNum, summary: s?.summary || '',
+                    characters_appeared: Array.isArray(s?.characters_appeared) ? s.characters_appeared : [],
+                    locations: Array.isArray(s?.locations) ? s.locations : [],
+                    key_events: keyEvents, time_labels: timeLabels, absolute_day: absDay,
+                    foreshadowing_planted: foreshadowingPlanted, foreshadowing_recovered: foreshadowingRecovered,
+                    character_changes: s?.character_changes || {}, world_changes: s?.world_changes || {},
+                    relationship_changes: Array.isArray(s?.relationship_changes) ? s.relationship_changes : [],
+                  },
+                  foreshadowing_new: foreshadowingPlanted.filter((f: any) => f.desc).map((f: any) => ({ foreshadow_id: f.id!, description: f.desc, chapter_number: chapNum })),
+                  foreshadowing_done: foreshadowingRecovered.filter((f: any) => f.id).map((f: any) => ({ foreshadow_id: f.id!, chapter_number: chapNum })),
+                  timeline_events: keyEvents.map((ev: string, ei: number) => ({
+                    chapter_number: chapNum, event_order: ei, event_description: ev,
+                    time_label: timeLabels[0] || '', absolute_day: absDay,
+                    location: Array.isArray(s?.locations) ? s.locations[0] || '' : '',
+                    characters_involved: JSON.stringify(Array.isArray(s?.characters_appeared) ? s.characters_appeared : []),
+                    is_major: ei === 0 ? 1 : 0,
+                  })),
+                  character_arcs: Object.entries(s?.character_changes || {}).map(([cn, d]) => ({ character_name: cn, chapter_number: chapNum, change_type: 'development', change_description: String(d) })),
+                  relationship_changes: (Array.isArray(s?.relationship_changes) ? s.relationship_changes : []).filter((rc: any) => rc.char_a && rc.char_b && rc.change).map((rc: any) => ({ char_a: rc.char_a, char_b: rc.char_b, chapter_number: chapNum, relation_type: rc.type || 'ally', change_description: rc.change })),
+                }
+              })()
+
+            // 模糊匹配兜底回收伏笔
+            const recDescItems = recovered.filter((item: any) => {
+              const desc = typeof item === 'string' ? item : (item.desc || item.description || '')
+              return desc && !(typeof item === 'object' && item.id)
+            })
+            for (const recItem of recDescItems) {
+              const recDesc = typeof recItem === 'string' ? recItem : (recItem.desc || recItem.description || '')
+              if (recDesc) {
+                try {
+                  await window.electronAPI!.db.run(
+                    `UPDATE foreshadowing_registry SET status='done',resolved_chapter=?,updated_at=datetime('now','localtime') WHERE project_id=? AND description LIKE ? AND status!='done'`,
+                    [chapNum, pid, `%${recDesc.slice(0, 30)}%`]
+                  )
+                } catch { /* best effort */ }
+              }
+            }
+            await applyStatePatches(window.electronAPI!.db, pid, patch)
+          } catch { /* state write failure is non-blocking */ }
+
+          // 7.5. P5: 自动回流新设定到 canon_facts（连续影响力模型 + 冲突检测）
+          try {
+            const charChanges: Record<string, string> = s?.character_changes || {}
+            const worldChanges: Record<string, string> = s?.world_changes || {}
+            const allEntries: { key: string; value: string; category: string }[] = [
+              ...Object.entries(charChanges).map(([k, v]) => ({ key: k, value: v, category: 'character' })),
+              ...Object.entries(worldChanges).map(([k, v]) => ({ key: k, value: v, category: 'setting' })),
+            ]
+            for (const entry of allEntries) {
+              if (!entry.key || !entry.value) continue
+              let occCount = 0
+              try {
+                const prevRows = await window.electronAPI!.db.query(
+                  `SELECT summary FROM chapter_summaries WHERE project_id = ? AND chapter_number < ? ORDER BY chapter_number DESC LIMIT 10`,
+                  [pid, chapNum]
+                )
+                for (const row of prevRows) { if ((row.summary || '').includes(entry.key)) occCount++ }
+              } catch { /* advisory */ }
+              const shouldAdmit = (entry.category === 'character' && occCount >= 2) || (entry.category === 'setting' && occCount >= 1)
+              if (!shouldAdmit) continue
+
+              // Check for existing — if exists, update tv/stability; if new, insert
+              const existing = await window.electronAPI!.db.get(
+                `SELECT id, details FROM canon_facts WHERE project_id = ? AND fact_key = ? AND fact_category = ?`,
+                [pid, entry.key, entry.category]
+              )
+              if (existing) {
+                let d: any = {}
+                try { d = JSON.parse(existing.details || '{}') } catch {}
+                if (d.non_collapse) continue  // 🟣 非收敛事实 — 永不自动更新
+                const oldTv = typeof d.truth_value === 'number' ? d.truth_value : 0.5
+                const maxTv = oldTv >= 0.8 ? 1.0 : oldTv >= 0.4 ? 0.9 : 0.6  // 🔒 收敛上限
+                const tvDelta = modeTvDelta(narrativeMode)
+                d.truth_value = Math.min(maxTv, Math.max(0.1, oldTv + tvDelta))
+                d.stability = Math.min(1.0, (d.stability || 0.5) + 0.1)
+                d.conflict_weight = Math.max(0, (d.conflict_weight || 0) - 0.05)
+                await window.electronAPI!.db.run(
+                  `UPDATE canon_facts SET details = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+                  [JSON.stringify(d), existing.id]
+                )
+              } else {
+                // New speculative entry
+                const confidence = occCount >= 3 ? 'high' : 'medium'
+                const details = JSON.stringify({ truth_value: 0.3, stability: 0.1, conflict_weight: 0, confidence, source_type: 'auto_extracted' })
+                await window.electronAPI!.db.run(
+                  `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, source, is_hard_rule, revealed_level, confidence, source_type, details)
+                   VALUES (?,?,?,?,'auto_extracted',0,${entry.category === 'character' ? 50 : 30},?,?,?)`,
+                  [pid, entry.category, entry.key, String(entry.value).slice(0, 200), confidence, 'auto_extracted', details]
+                )
+              }
+
+              // 🟣 冲突检测：新事实是否与已有 soft/hard 事实语义矛盾
+              if (occCount <= 2) {
+                try {
+                  const conflictingFacts = await window.electronAPI!.db.query(
+                    `SELECT id, fact_key, fact_value, details FROM canon_facts WHERE project_id = ? AND fact_category = ? AND id != ? AND (details LIKE '%"truth_value":0.%' AND CAST(json_extract(details, '$.truth_value') AS REAL) >= 0.4) LIMIT 5`,
+                    [pid, entry.category, existing?.id || 0]
+                  )
+                  for (const cf of conflictingFacts) {
+                    let cd: any = {}
+                    try { cd = JSON.parse(cf.details || '{}') } catch {}
+                    // Simple overlap check: shared keywords in fact_value
+                    const cfWords = new Set((cf.fact_value || '').split(/[，。、\s]+/))
+                    const entryWords = entry.value.split(/[，。、\s]+/)
+                    const overlap = entryWords.filter(w => cfWords.has(w) && w.length >= 2)
+                    if (overlap.length >= 2 && entryWords.some(w => w.includes('不') || w.includes('没') || w.includes('未') || w.includes('假'))) {
+                      // Potential contradiction — record it
+                      await window.electronAPI!.db.run(
+                        `INSERT OR IGNORE INTO conflict_facts (project_id, fact_a_id, fact_b_id, fact_a_text, fact_b_text, conflict_type, resolution_status, detected_chapter)
+                         VALUES (?,?,?,?,?,'ambiguity','unresolved',?)`,
+                        [pid, cf.id, existing?.id || null, `${cf.fact_key}: ${cf.fact_value.slice(0, 100)}`, `${entry.key}: ${entry.value.slice(0, 100)}`, chapNum]
+                      )
+                      // Update conflict_weight on the existing fact
+                      cd.conflict_weight = Math.min(1.0, (cd.conflict_weight || 0) + 0.1)
+                      await window.electronAPI!.db.run(
+                        `UPDATE canon_facts SET details = ? WHERE id = ?`,
+                        [JSON.stringify(cd), cf.id]
+                      )
+                      break // one conflict per entry is enough
+                    }
+                  }
+                } catch { /* conflict detection is best-effort */ }
+              }
+            }
+
+            // v2.5: 衰减未提及的事实（叙事遗忘曲线）
+            try {
+              const mentionedKeys = new Set(allEntries.map(e => e.key))
+              const allFacts = await window.electronAPI!.db.query(
+                "SELECT id, fact_key, details FROM canon_facts WHERE project_id = ? AND details IS NOT NULL AND details != ''",
+                [pid]
+              )
+              const decayRate = modeDecayRate(narrativeMode)
+              for (const f of allFacts) {
+                if (mentionedKeys.has(f.fact_key)) continue  // 本章提到了，不衰减
+                let d: any = {}
+                try { d = JSON.parse(f.details || '{}') } catch { continue }
+                if (d.non_collapse) continue  // 🟣 非收敛事实永不衰减
+                const oldTv = typeof d.truth_value === 'number' ? d.truth_value : 0.5
+                const isHard = oldTv >= 0.8
+                const effectiveDecay = isHard ? decayRate * 0.33 : decayRate  // hard_canon 衰减1/3
+                d.truth_value = Math.max(0.1, oldTv - effectiveDecay)
+                d.stability = Math.max(0.05, (d.stability || 0.5) - decayRate * 0.67)
+                await window.electronAPI!.db.run(
+                  "UPDATE canon_facts SET details = ?, updated_at = datetime('now','localtime') WHERE id = ?",
+                  [JSON.stringify(d), f.id]
+                )
+              }
+            } catch { /* decay is best-effort */ }
+          } catch { /* auto-feedback is non-blocking */ }
+
+          // 8. AI concerns + leak score 提示
+          if (checkResult.concerns && checkResult.concerns.length > 0) {
+            const concernSummary = checkResult.concerns
+              .slice(0, 3)
+              .map((c: any) => `⚠ ${c.type}: ${c.detail}`)
+              .join('\n')
+            if (concernSummary) showToast('info', `叙事建议（仅供参考）：\n${concernSummary}`)
+          }
+          if (checkResult.leakScore && checkResult.leakScore.threshold !== 'safe') {
+            showToast('info', `语义泄露评分：${checkResult.leakScore.raw} (z=${checkResult.leakScore.z}, ${checkResult.leakScore.threshold})`)
+          }
+        } catch { /* 摘要/检查流程失败不阻塞正文保存 */ }
       })()
     } catch (e: any) {
       if (!cancelledRef.current) showToast('error', '生成失败：' + e.message)
@@ -1205,36 +1611,98 @@ export default function Workspace() {
   useEffect(() => { localStorage.setItem('workspace_leftWidth', String(leftWidth)) }, [leftWidth])
   useEffect(() => { localStorage.setItem('workspace_rightWidth', String(rightWidth)) }, [rightWidth])
 
-  // ========== 校对 ==========
-  const handleReview = async () => {
-    if (!window.electronAPI || chapters.length < 2) { showToast('error', '至少需要2章才能校对'); return }
-    setReviewing(true)
-    setReviewResult(null)
+  // ========== 叙事控制台 ==========
+  const handleNarrativeReport = async () => {
+    if (!window.electronAPI) return
+    setNarrativeReportLoading(true)
+    setNarrativeReport(null)
     cancelledRef.current = false
     try {
-      const chapterContents = chapters.map(ch => ({
-        num: ch.chapter_number, title: ch.title, content: ch.content,
-      }))
+      // Gather data for the report
+      const lcr = lastCheckResult
+      const lls = lastLeakScore
+      const led = lastEventData
+      const cal = calibrationStats
+
+      // Event stats string
+      const eventTypeCounts: Record<string, number> = {}
+      if (led) for (const e of led.events) { eventTypeCounts[e.event_type] = (eventTypeCounts[e.event_type] || 0) + 1 }
+      const eventStats = led
+        ? Object.entries(eventTypeCounts).map(([t, c]) => `${t}:${c}`).join(' ')
+        : '暂无事件数据'
+
+      const revealEst = led?.reveal_estimates
+        ? `world+${led.reveal_estimates.world}% plot+${led.reveal_estimates.plot}% character+${led.reveal_estimates.character}%`
+        : '暂无'
+
+      // Foreshadowing counts
+      let activeFS = 0, resolvedFS = 0
+      try {
+        const fsRows = await window.electronAPI.db.query(
+          "SELECT status FROM foreshadowing_registry WHERE project_id = ?", [Number(id)]
+        )
+        for (const r of fsRows) { if (r.status === 'active') activeFS++; else if (r.status === 'done') resolvedFS++ }
+      } catch { /* advisory */ }
+
+      // Recent summaries
+      let recentSummaries = '暂无'
+      try {
+        const sumRows = await window.electronAPI.db.query(
+          "SELECT chapter_number, summary FROM chapter_summaries WHERE project_id = ? ORDER BY chapter_number DESC LIMIT 5",
+          [Number(id)]
+        )
+        if (sumRows.length > 0) {
+          recentSummaries = sumRows.map((r: any) => `第${r.chapter_number}章: ${(r.summary || '').slice(0, 100)}`).join('\n')
+        }
+      } catch { /* advisory */ }
+
+      // Current day
+      let curDay = 0
+      try {
+        const dr = await window.electronAPI!.db.get(
+          "SELECT MAX(absolute_day) as cur_day FROM story_timeline WHERE project_id = ?", [Number(id)]
+        )
+        curDay = dr?.cur_day || 0
+      } catch { /* advisory */ }
+
       const reply = await window.electronAPI.aiChat([
-        { role: 'system', content: REVIEW_SYSTEM },
-        { role: 'user', content: REVIEW_USER(project?.title || '', outlineContent, chapterContents) },
-      ], '校对检查')
-      const cleanReply = reply.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-      const jsonMatch = cleanReply.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0])
-        setReviewResult({
-          overall_report: parsed.overall_report || reply,
-          chapter_fixes: (parsed.chapter_fixes || []).filter((f: any) => f.issues?.length > 0),
+        { role: 'system', content: NARRATIVE_STATE_REPORT_SYSTEM },
+        {
+          role: 'user', content: NARRATIVE_STATE_REPORT_USER(
+            lcr?.hardViolationCount || 0,
+            lls?.z || 0, lls?.raw || 0, lls?.threshold || 'unknown',
+            cal?.chapters || 0, cal?.mean || 0, cal?.std || 0,
+            eventStats, revealEst, curDay,
+            activeFS, resolvedFS,
+            recentSummaries,
+          )
+        },
+      ], '叙事报告')
+
+      const jm = reply.match(/\{[\s\S]*\}/)
+      if (jm) {
+        const parsed = JSON.parse(jm[0])
+        setNarrativeReport({
+          narrative_state: parsed.narrative_state || '',
+          pacing: parsed.pacing || '',
+          characters: parsed.characters || '',
+          risk: parsed.risk || '',
+          suggested_actions: (parsed.suggested_actions || []).map((a: any) => ({
+            text: a.text || '', target_chapter: a.target_chapter || null, executable: false as const,
+          })),
         })
-      } else {
-        setReviewResult({ overall_report: reply, chapter_fixes: [] })
       }
     } catch (e: any) {
-      if (cancelledRef.current) showToast('info', '已取消校对')
-      else showToast('error', '校对失败：' + (e.message || '未知'))
+      if (cancelledRef.current) showToast('info', '已取消')
+      else showToast('error', '报告生成失败：' + (e.message || '未知'))
     }
-    finally { setReviewing(false) }
+    finally { setNarrativeReportLoading(false) }
+  }
+
+  /** 将建议文本注入到额外提示框 */
+  const handleInjectHint = (text: string) => {
+    setGenHint(prev => prev ? `${prev}\n[建议] ${text}` : `[建议] ${text}`)
+    showToast('success', '建议已注入到额外提示框')
   }
 
   /** 自动修改单章 */
@@ -1336,9 +1804,9 @@ export default function Workspace() {
   }
 
   // ========== 渲染 ==========
-  const chDone = (n: number) => {
+  const chDone = (n: number): boolean => {
     const ch = chapters.find(c => c.chapter_number === n)
-    return ch && (ch.status === 'generated' || ch.status === 'edited')
+    return !!(ch && (ch.status === 'generated' || ch.status === 'edited'))
   }
 
   if (!loaded) return <div className="flex justify-center py-24 text-text-secondary">加载中...</div>
@@ -1470,14 +1938,29 @@ export default function Workspace() {
               <div className="bg-primary-light/10 rounded border border-primary/10 text-xs">
                 <button onClick={() => setShowFuncBar(!showFuncBar)}
                   className="w-full px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:text-text-main">
-                  <span className="truncate">第{selectedChapter}章 · {plan.function || '—'}{plan.emotional_goal ? ' · ' + plan.emotional_goal : ''}</span>
-                  <span className="text-text-placeholder shrink-0 text-[10px]">{showFuncBar ? '▲' : '▼'}</span>
+                  <span className="truncate">第{selectedChapter}章 · {plan.core_event || plan.summary || '—'}</span>
+                  <span className="text-text-placeholder shrink-0 text-xxs">{showFuncBar ? '▲' : '▼'}</span>
                 </button>
                 {showFuncBar && (
-                  <div className="px-3 pb-1.5 flex flex-wrap gap-x-3 border-t border-primary/10 pt-1.5">
-                    <span><span className="text-text-placeholder">功能：</span>{plan.function || '—'}</span>
-                    {plan.emotional_goal && <span><span className="text-text-placeholder">情绪：</span>{plan.emotional_goal}</span>}
-                    <span className="truncate"><span className="text-text-placeholder">概要：</span>{plan.summary}</span>
+                  <div className="px-3 pb-1.5 space-y-1.5 border-t border-primary/10 pt-1.5">
+                    {plan.core_event && <div className="text-text-main">{plan.core_event}</div>}
+                    {plan.emotional_arc && <div><span className="text-text-placeholder">情绪弧线：</span>{plan.emotional_arc}</div>}
+                    {plan.plot_beats && plan.plot_beats.length > 0 ? (
+                      <div>
+                        <span className="text-text-placeholder">情节点（{plan.plot_beats.length}）：</span>
+                        <div className="mt-0.5 space-y-0.5 max-h-32 overflow-auto">
+                          {plan.plot_beats.map((b: string, i: number) => <div key={i} className="text-text-secondary">{i + 1}. {b}</div>)}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {plan.estimated_words > 0 && <span><span className="text-text-placeholder">字数：</span>{plan.estimated_words}字</span>}
+                        {plan.summary && <span className="truncate"><span className="text-text-placeholder">概要：</span>{plan.summary}</span>}
+                      </>
+                    )}
+                    {plan.cool_moment && <div><span className="text-text-placeholder">爽点：</span>{plan.cool_moment}</div>}
+                    {plan.opening_hook && <div><span className="text-text-placeholder">章首钩子：</span>{plan.opening_hook.type} · {plan.opening_hook.detail}</div>}
+                    {plan.closing_hook && <div><span className="text-text-placeholder">章尾钩子：</span>{plan.closing_hook.type}（期待度：{plan.closing_hook.impact}）</div>}
                   </div>
                 )}
               </div>
@@ -1628,7 +2111,13 @@ export default function Workspace() {
         {/* 去AI味 */}
         {editingContent && (
           <div className="px-4 pt-2">
-            <DeslopPanel content={editingContent} onApply={(c) => { setEditingContent(c); handleSave() }} />
+            <DeslopPanel
+              content={editingContent}
+              onApply={(c) => { setEditingContent(c); handleSave() }}
+              styleContext={buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)}
+              personalityContext={buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)}
+              onMarksChange={(scores, selected) => setMarkData({ scores, selected })}
+            />
           </div>
         )}
 
@@ -1646,15 +2135,64 @@ export default function Workspace() {
                 {streamingText || '...'}
               </pre>
             </div>
+          ) : showMarks && markData ? (
+            /* 标记视图 */
+            <div className="w-full h-full min-h-[400px] overflow-auto rounded-card bg-white shadow-card">
+              <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-2 bg-bg-secondary border-b border-border">
+                <span className="text-xs text-text-secondary">
+                  🔍 标记视图 — {markData.scores.filter(s => s.score > 0).length} 段有问题，{markData.selected.size} 段已选
+                </span>
+                <button onClick={() => setShowMarks(false)}
+                  className="px-2 py-1 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light">
+                  ✏️ 返回编辑
+                </button>
+              </div>
+              <div className="px-10 py-8 text-base leading-relaxed whitespace-pre-wrap font-sans">
+                {(() => {
+                  const paragraphs = editingContent.split(/\n\n+/)
+                  return paragraphs.map((para, i) => {
+                    const scoreItem = markData.scores.find(s => s.index === i)
+                    const isSelected = markData.selected.has(i)
+                    const hasIssue = scoreItem && scoreItem.score > 0
+
+                    let bgClass = ''
+                    let badge = ''
+                    if (isSelected && hasIssue) {
+                      bgClass = 'bg-warning/10 border-l-2 border-warning pl-3 -ml-3 rounded-r'
+                      badge = `⭐${scoreItem!.score}`
+                    } else if (hasIssue && !isSelected) {
+                      bgClass = 'bg-gray-50 opacity-50'
+                    }
+
+                    return (
+                      <p key={i} className={`mb-2 ${bgClass}`}>
+                        {badge && <span className="text-xxs text-warning mr-1.5">{badge}</span>}
+                        {para || ' '}
+                      </p>
+                    )
+                  })
+                })()}
+              </div>
+            </div>
           ) : (
-            <textarea
-              value={editingContent}
-              onChange={(e) => setEditingContent(e.target.value)}
-              className="w-full h-full min-h-[400px] px-10 py-8 text-base leading-relaxed
-                focus:outline-none focus:shadow-glow rounded-card resize-none
-                bg-white shadow-card placeholder:text-text-placeholder"
-              placeholder="在左侧目录选择章节，点击「生成本章」开始..."
-            />
+            <>
+              {markData && (
+                <div className="flex justify-end mb-1.5">
+                  <button onClick={() => setShowMarks(true)}
+                    className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary hover:border-primary hover:text-primary transition-colors">
+                    🔍 标记段落
+                  </button>
+                </div>
+              )}
+              <textarea
+                value={editingContent}
+                onChange={(e) => setEditingContent(e.target.value)}
+                className="w-full h-full min-h-[400px] px-10 py-8 text-base leading-relaxed
+                  focus:outline-none focus:shadow-glow rounded-card resize-none
+                  bg-white shadow-card placeholder:text-text-placeholder"
+                placeholder="在左侧目录选择章节，点击「生成本章」开始..."
+              />
+            </>
           )}
           </div>
         </div>
@@ -1677,11 +2215,16 @@ export default function Workspace() {
           {!rightCollapsed && (['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
-              className={`flex-1 py-1.5 text-[11px] font-medium transition-colors text-center
-                ${rightTab === tab ? 'text-primary border-b-2 border-primary' : 'text-text-secondary hover:text-text-main'}
+              className={`flex-1 py-1 text-xs tracking-wide transition-colors text-center whitespace-nowrap
+                ${rightTab === tab ? 'text-primary font-semibold' : 'text-text-secondary hover:text-text-main font-normal'}
               `}>
-              {{ outline: '大纲', volumes: '细纲', settings: '设定',
-                 foreshadowing: '伏笔', timeline: '时间线', review: '校对' }[tab]}
+              <span className="relative inline-block pb-1">
+                {{ outline: '大纲', volumes: '细纲', settings: '设定',
+                   foreshadowing: '伏笔', timeline: '时间线', review: '校对' }[tab]}
+                {rightTab === tab && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+                )}
+              </span>
             </button>
           ))}
         </div>
@@ -1692,17 +2235,19 @@ export default function Workspace() {
             <div className="p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-medium text-text-main">故事大纲</span>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                  <button onClick={() => setFullscreenEdit({ title: '编辑大纲', content: outlineContent, onSave: (c: string) => { saveOutline(c) } })}
+                    className="text-xs text-primary hover:underline">📝 编辑</button>
                   {outlineContent && (
                     <button onClick={() => setFullView({ title: '故事大纲', content: outlineContent })}
-                      className="text-xs text-primary hover:underline">📖 全屏查看</button>
+                      className="text-xs text-text-secondary hover:underline">📖 查看</button>
                   )}
                   <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
                     className="text-xs text-primary hover:underline disabled:opacity-50">🔄 重新生成</button>
                 </div>
               </div>
               {outlineContent ? (
-                <pre className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed max-h-[calc(100vh-200px)] overflow-auto">
+                <pre className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed h-full overflow-auto px-1">
                   {outlineContent}
                 </pre>
               ) : (
@@ -1717,177 +2262,22 @@ export default function Workspace() {
 
           {/* 细纲 Tab */}
           {rightTab === 'volumes' && (
-            <div className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-text-main">卷纲与细纲</span>
-                <div className="flex gap-2">
-                  <button onClick={addVolume}
-                    className="text-xs text-primary hover:underline">＋新建卷</button>
-                  <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
-                    className="text-xs text-primary hover:underline disabled:opacity-50">📐 生成下一卷</button>
-                </div>
-              </div>
-
-              {volumes.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-xs text-text-placeholder mb-2">尚无卷纲</p>
-                  <button onClick={() => setShowGenPanel(showGenPanel === 'volumes' ? null : 'volumes')} disabled={generating || !outlineContent}
-                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn disabled:opacity-50">🤖 生成下一卷</button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {volumes.map(vol => {
-                    const isExpanded = expandedVolume === vol.volume_number
-                    const volPlans = chapterPlans.filter(
-                      p => p.chapter_number >= vol.chapter_range[0] && p.chapter_number <= vol.chapter_range[1]
-                    )
-                    return (
-                      <div key={vol.volume_number}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => { if (dragChapter) { moveChapterToVolume(dragChapter, vol.volume_number); setDragChapter(null) } }}
-                        className={`border border-border rounded-card overflow-hidden transition-colors
-                          ${dragChapter ? 'border-primary/50 bg-primary-light/10' : ''}`}
-                      >
-                        <button
-                          onClick={() => setExpandedVolume(isExpanded ? null : vol.volume_number)}
-                          className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-secondary transition-colors text-left"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium text-text-main truncate">{vol.title}</div>
-                            <div className="text-xs text-text-placeholder">第{vol.chapter_range[0]}-{vol.chapter_range[1]}章 · {vol.theme}</div>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button onClick={(e) => { e.stopPropagation(); deleteVolume(vol.volume_number) }}
-                              className="text-xs text-text-placeholder hover:text-danger" title="删除此卷">🗑</button>
-                            <span className="text-xs text-text-placeholder">{isExpanded ? '▲' : '▼'}</span>
-                          </div>
-                        </button>
-                        {isExpanded && (
-                          <div className="border-t border-border px-3 py-2 space-y-2">
-                            {/* 核心信息：始终显示 */}
-                            {vol.detailed_summary ? (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">📖 剧情详述</p>
-                                <p className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{vol.detailed_summary}</p>
-                              </div>
-                            ) : (
-                              <p className="text-xs text-text-secondary">{vol.summary || vol.theme}</p>
-                            )}
-                            {((vol.key_events?.length || vol.key_events_str) && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">⚡ 关键事件</p>
-                                <p className="text-xs text-text-secondary">
-                                  {(vol.key_events_str || vol.key_events?.map((e: any) => typeof e === 'string' ? e : `${e.event}(${e.chapters})`).join('、'))}
-                                </p>
-                              </div>
-                            ))}
-                            {vol.character_arcs && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">👤 角色弧线</p>
-                                <p className="text-xs text-text-secondary whitespace-pre-wrap">{vol.character_arcs}</p>
-                              </div>
-                            )}
-                            {vol.emotional_curve && (
-                              <div>
-                                <p className="text-xs font-medium text-text-secondary mb-0.5">🎭 情感曲线</p>
-                                <p className="text-xs text-text-secondary">{vol.emotional_curve}</p>
-                              </div>
-                            )}
-                            {/* 展开更多：v1.4.0 高级字段 */}
-                            {((vol.pacing_design || vol.emotional_cadence || vol.word_count_target || vol.connection_prev || vol.connection_next || vol.foreshadowing_plant?.length || vol.foreshadowing_payoff?.length || vol.foreshadowing_advance || vol.character_milestones?.length || vol.conflict_nodes?.length)) && (
-                              <MoreFields vol={vol} />
-                            )}
-                            <div className="flex gap-1.5 flex-wrap">
-                              <button
-                                onClick={async () => {
-                                  for (let c = vol.chapter_range[0]; c <= vol.chapter_range[1]; c++) {
-                                    if (!chapterPlans.find(p => p.chapter_number === c)) {
-                                      await genSingleChapterPlan(c)
-                                    }
-                                  }
-                                }}
-                                disabled={generating}
-                                className="px-2 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
-                              >🤖 一键生成全卷</button>
-                              <button
-                                onClick={() => setFullView({
-                                  title: vol.title,
-                                  content: [
-                                    `# ${vol.title}`,
-                                    `**主题**：${vol.theme}`,
-                                    `**章节范围**：第${vol.chapter_range[0]}-${vol.chapter_range[1]}章`,
-                                    vol.word_count_target ? `**字数目标**：${vol.word_count_target.toLocaleString()} 字` : '',
-                                    vol.connection_prev ? `**承上**：${vol.connection_prev}` : '',
-                                    vol.connection_next ? `**启下**：${vol.connection_next}` : '',
-                                    '',
-                                    `**剧情详述**：${vol.detailed_summary || vol.summary}`,
-                                    vol.pacing_design ? `**节奏设计**：${vol.pacing_design}` : '',
-                                    vol.emotional_cadence ? `**情绪节奏**：${vol.emotional_cadence}` : '',
-                                    vol.character_arcs ? `**角色弧线**：${vol.character_arcs}` : '',
-                                    vol.emotional_curve ? `**情感曲线**：${vol.emotional_curve}` : '',
-                                    `**关键事件**：${vol.key_events.join('、')}`,
-                                    '',
-                                    vol.character_milestones?.length ? `**人物里程碑**：\n${vol.character_milestones.map(cm => `- ${cm.character}: ${cm.start_state} → ${cm.end_state} (${cm.key_event})`).join('\n')}` : '',
-                                    vol.conflict_nodes?.length ? `**关键冲突节点**：\n${vol.conflict_nodes.map(cn => `- [${cn.chapter_segment}] ${cn.description} (${cn.escalation_type})`).join('\n')}` : '',
-                                    vol.foreshadowing_plant?.length ? `**🪝 本卷新埋**：${vol.foreshadowing_plant.join('、')}` : '',
-                                    vol.foreshadowing_payoff?.length ? `**✅ 本卷回收**：${vol.foreshadowing_payoff.join('、')}` : '',
-                                    vol.foreshadowing_advance ? `**🔗 伏笔推进**：${vol.foreshadowing_advance}` : '',
-                                    vol.foreshadowing_planted?.length ? `**🪝 新伏笔**：${vol.foreshadowing_planted.join('、')}` : '',
-                                    vol.foreshadowing_recovered?.length ? `**✅ 回收伏笔**：${vol.foreshadowing_recovered.join('、')}` : '',
-                                    '',
-                                    '## 本卷章节细纲',
-                                    ...volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary}\n人物：${p.characters.join('、')}\n事件：${p.key_events.join('、')}\n字数：${p.estimated_words}`)
-                                  ].filter(Boolean).join('\n\n')
-                                })}
-                                className="px-2 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
-                              >📖 查看完整</button>
-                            </div>
-                            {/* 逐章生成列表 */}
-                            <div className="space-y-0.5 mt-1 max-h-64 overflow-auto">
-                              {Array.from({ length: vol.chapter_range[1] - vol.chapter_range[0] + 1 }, (_, i) => vol.chapter_range[0] + i).map(cn => {
-                                const plan = chapterPlans.find(p => p.chapter_number === cn)
-                                const prevPlan = cn > vol.chapter_range[0] ? chapterPlans.find(p => p.chapter_number === cn - 1) : true
-                                if (!plan) {
-                                  return (
-                                    <div key={cn} className="flex items-center gap-1.5 text-xs text-text-placeholder px-2 py-0.5">
-                                      <span>○</span><span className="flex-1">{cn}. 未生成</span>
-                                      <button onClick={() => genSingleChapterPlan(cn)}
-                                        disabled={generating || !prevPlan}
-                                        className="text-primary hover:underline disabled:opacity-30 text-xs">
-                                        {!prevPlan ? '需上章' : '生成'}
-                                      </button>
-                                    </div>
-                                  )
-                                }
-                                return (
-                                  <div key={cn}
-                                    draggable onDragStart={() => setDragChapter(cn)}
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={() => { if (dragChapter) { moveChapterToVolume(dragChapter, vol.volume_number); setDragChapter(null) } }}
-                                    onClick={() => setFullView({
-                                      title: `第${cn}章细纲：${plan.title}`,
-                                      content: `# 第${cn}章 ${plan.title}\n\n**功能**：${(plan as any).function || '—'}\n**情绪目标**：${(plan as any).emotional_goal || '—'}\n**结尾**：${(plan as any).ending_type || '—'}\n**字数**：${plan.estimated_words}字\n\n**概要**\n${plan.summary}\n\n**人物**：${plan.characters.join('、')}\n\n**关键事件**\n${plan.key_events.map((e: string) => '- ' + e).join('\n')}`
-                                    })}
-                                    className={`text-xs rounded px-2 py-0.5 cursor-pointer flex items-center gap-1.5 transition-colors
-                                      ${dragChapter === cn ? 'opacity-50' : ''}
-                                      ${selectedChapter === cn ? 'bg-primary-light text-primary' : 'text-text-secondary hover:bg-bg-secondary'}`}>
-                                    <span className={chDone(cn) ? 'text-success' : 'text-text-placeholder'}>{chDone(cn) ? '●' : '○'}</span>
-                                    <span className="flex-1 truncate">{cn}. {plan.title}</span>
-                                    <button onClick={(e) => { e.stopPropagation(); genSingleChapterPlan(cn) }}
-                                      className="text-text-placeholder hover:text-primary text-xs" title="重新生成">🔄</button>
-                                    <span className="text-text-placeholder cursor-grab" title="拖拽">⠿</span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+            <VolumePanel
+              volumes={volumes} chapterPlans={chapterPlans}
+              expandedVolume={expandedVolume} setExpandedVolume={setExpandedVolume}
+              generating={generating} outlineContent={outlineContent}
+              outlineVersion={outlineVersion}
+              showGenPanel={showGenPanel} setShowGenPanel={setShowGenPanel}
+              dragChapter={dragChapter} setDragChapter={setDragChapter}
+              selectedChapter={selectedChapter}
+              addVolume={addVolume} deleteVolume={deleteVolume}
+              moveChapterToVolume={moveChapterToVolume}
+              genSingleChapterPlan={genSingleChapterPlan}
+              setFullView={setFullView} chDone={chDone}
+              onUpdateVolume={updateVolume}
+              onUpdateChapterPlan={updateChapterPlan}
+              onFullscreenEdit={(title, content, onSave) => setFullscreenEdit({ title, content, onSave })}
+            />
           )}
 
           {/* 设定 Tab（统一管理角色/世界/规则等） */}
@@ -1907,114 +2297,27 @@ export default function Workspace() {
 
           {/* 时间线 Tab */}
           {rightTab === 'timeline' && (
-            <TimelinePanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} />
+            <TimelinePanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} volumes={volumes} />
           )}
 
-          {/* 校对 Tab */}
+          {/* 叙事控制台 Tab */}
           {rightTab === 'review' && (
-            <div className="p-3 overflow-auto flex-1">
-              {reviewing ? (
-                <div className="flex gap-2 mb-3">
-                  <span className="flex-1 px-3 py-2 text-xs text-warning flex items-center justify-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 校对中...</span>
-                  <button onClick={() => handleCancel()} className="px-3 py-2 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
-                </div>
-              ) : (
-                <button onClick={handleReview} disabled={chapters.length < 2}
-                  className="w-full px-3 py-2 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50 mb-3">
-                  🔍 执行校对
-                </button>
-              )}
-
-              {!reviewResult && !reviewing && (
-                <p className="text-xs text-text-placeholder text-center py-8">
-                  生成至少 2 章后可执行校对，检查人物一致性、情节连贯、时间线和伏笔
-                </p>
-              )}
-
-              {reviewResult && (
-                <div className="space-y-3">
-                  {/* 整体评价 */}
-                  <details className="bg-white rounded-card border border-border">
-                    <summary className="px-3 py-2 text-xs font-medium text-text-main cursor-pointer">📋 整体评价</summary>
-                    <p className="px-3 pb-2 text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">{reviewResult.overall_report}</p>
-                  </details>
-
-                  {/* 逐章问题 */}
-                  {reviewResult.chapter_fixes.length === 0 ? (
-                    <p className="text-xs text-success text-center py-4">✅ 未发现明显问题</p>
-                  ) : (
-                    reviewResult.chapter_fixes.map(fix => {
-                      const sevColors: Record<string, string> = { 'S1': 'bg-red-600', 'S2': 'bg-orange-500', 'S3': 'bg-yellow-500', 'S4': 'bg-gray-400', '严重': 'bg-danger', '中等': 'bg-warning', '轻微': 'bg-text-placeholder' }
-                      const sevLabels: Record<string, string> = { 'S1': 'S1 硬事实冲突', 'S2': 'S2 软设定冲突', 'S3': 'S3 风格不一致', 'S4': 'S4 质量建议' }
-                      const isEditing = editingFixPrompt === fix.chapter_number
-                      return (
-                        <div key={fix.chapter_number} className="bg-white rounded-card border border-border p-3">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-xs font-medium text-text-main">第{fix.chapter_number}章</span>
-                            <span className={`text-[10px] text-white px-1.5 py-0.5 rounded-full ${sevColors[fix.severity] || 'bg-text-placeholder'}`}>{sevLabels[fix.severity] || fix.severity}</span>
-                          </div>
-                          <ul className="text-xs text-text-secondary mb-2 space-y-0.5">
-                            {fix.issues.map((issue, i) => (
-                              <li key={i} className="flex gap-1"><span className="text-text-placeholder shrink-0">{i + 1}.</span><span>{issue}</span></li>
-                            ))}
-                          </ul>
-                          {/* 修改提示 — 可编辑 */}
-                          {isEditing ? (
-                            <div className="mb-2">
-                              <textarea
-                                value={editFixPromptText}
-                                onChange={(e) => setEditFixPromptText(e.target.value)}
-                                rows={4}
-                                className="w-full px-2 py-1 text-xs border border-primary rounded resize-none focus:outline-none"
-                              />
-                              <div className="flex gap-2 mt-1">
-                                <button onClick={() => {
-                                  const updated = reviewResult.chapter_fixes.map(f =>
-                                    f.chapter_number === fix.chapter_number ? { ...f, fix_prompt: editFixPromptText } : f
-                                  )
-                                  setReviewResult({ ...reviewResult, chapter_fixes: updated })
-                                  setEditingFixPrompt(null)
-                                }} className="text-xs text-primary hover:underline">💾 保存</button>
-                                <button onClick={() => setEditingFixPrompt(null)} className="text-xs text-text-placeholder hover:underline">取消</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <pre
-                              onClick={() => { setEditingFixPrompt(fix.chapter_number); setEditFixPromptText(fix.fix_prompt) }}
-                              className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed mb-2 p-2 bg-bg-secondary rounded cursor-pointer hover:bg-border/30"
-                              title="点击编辑修改提示"
-                            >{fix.fix_prompt}</pre>
-                          )}
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => {
-                                const text = isEditing ? editFixPromptText : fix.fix_prompt
-                                navigator.clipboard.writeText(text).then(
-                                  () => showToast('success', '修改提示已复制！粘贴到生成面板的「额外提示」框中使用'),
-                                  () => showToast('error', '复制失败，请手动复制')
-                                )
-                              }}
-                              className="flex-1 px-2 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20"
-                            >📋 复制修改提示</button>
-                            <button
-                              onClick={() => autoFixChapter(fix.chapter_number, fix.issues, isEditing ? editFixPromptText : fix.fix_prompt)}
-                              disabled={fixingChapter === fix.chapter_number}
-                              className="flex-1 px-2 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
-                            >{fixingChapter === fix.chapter_number ? '⏳ 修改中...' : '🤖 自动修改'}</button>
-                          {fixingChapter === fix.chapter_number && (
-                            <button onClick={() => handleCancel()} className="px-2 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10 shrink-0">⏹</button>
-                          )}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                  <p className="text-[10px] text-text-placeholder text-center pb-2">
-                    💡 「复制修改提示」后粘贴到生成面板的「额外提示」输入框，重新生成即可 | 「自动修改」仅处理可精确定位的文字问题
-                  </p>
-                </div>
-              )}
-            </div>
+            <ReviewPanel
+              lastCheckResult={lastCheckResult}
+              lastLeakScore={lastLeakScore}
+              lastEventData={lastEventData}
+              calibrationStats={calibrationStats}
+              narrativeReport={narrativeReport}
+              narrativeReportLoading={narrativeReportLoading}
+              onGenerateReport={handleNarrativeReport}
+              onCancel={handleCancel}
+              chapters={chapters}
+              foreshadowingItems={[]}
+              currentChapter={selectedChapter}
+              fixingChapter={fixingChapter}
+              autoFixChapter={autoFixChapter}
+              onInjectHint={handleInjectHint}
+            />
           )}
 
           {/* 自动修改预览弹窗 */}
@@ -2057,7 +2360,7 @@ export default function Workspace() {
         <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setGenConfig(prev => ({ ...prev, open: false }))}>
           <div className="bg-white rounded-card shadow-xl max-w-md w-full mx-4 max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 border-b border-border flex items-center justify-between shrink-0">
-              <h2 className="text-section-title">{genConfig.title}</h2>
+              <h2 className="text-lg">{genConfig.title}</h2>
               <button onClick={() => setGenConfig(prev => ({ ...prev, open: false }))} className="text-text-placeholder hover:text-text-main text-lg">✕</button>
             </div>
             <div className="px-5 py-3 space-y-3 overflow-auto flex-1">
@@ -2102,19 +2405,40 @@ export default function Workspace() {
         </div>
       )}
 
+      {/* 全屏编辑弹窗 */}
+      {fullscreenEdit && (
+        <div className="fixed inset-0 z-50 bg-white flex flex-col" onClick={() => {}}>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
+            <span className="text-sm font-medium text-text-main">✏️ {fullscreenEdit.title}</span>
+            <div className="flex gap-2">
+              <button onClick={() => { fullscreenEdit.onSave(fullscreenEdit.content); setFullscreenEdit(null) }}
+                className="px-4 py-2 bg-primary text-white rounded-btn text-sm hover:bg-primary-hover">💾 保存并关闭</button>
+              <button onClick={() => setFullscreenEdit(null)}
+                className="px-4 py-2 border border-border-input text-text-secondary rounded-btn text-sm hover:bg-bg-secondary">取消</button>
+            </div>
+          </div>
+          <textarea
+            value={fullscreenEdit.content}
+            onChange={e => setFullscreenEdit({ ...fullscreenEdit, content: e.target.value })}
+            className="flex-1 w-full px-8 py-4 text-sm leading-relaxed resize-none focus:outline-none font-mono"
+            spellCheck={false}
+          />
+        </div>
+      )}
+
       {/* 全屏查看弹窗 */}
       {fullView && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setFullView(null)}>
           <div className="bg-white rounded-card shadow-2xl max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-              <h2 className="text-section-title text-text-main">{fullView.title}</h2>
+              <h2 className="text-lg text-text-main">{fullView.title}</h2>
               <button onClick={() => setFullView(null)} className="w-8 h-8 flex items-center justify-center rounded-btn hover:bg-bg-secondary text-text-secondary">✕</button>
             </div>
             <div className="flex-1 overflow-auto p-5">
               <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">{fullView.content}</pre>
             </div>
             <div className="px-5 py-3 border-t border-border text-right">
-              <button onClick={() => setFullView(null)} className="px-4 py-2 bg-primary text-white rounded-btn text-body hover:bg-primary-hover">关闭</button>
+              <button onClick={() => setFullView(null)} className="px-4 py-2 bg-primary text-white rounded-btn text-base hover:bg-primary-hover">关闭</button>
             </div>
           </div>
         </div>

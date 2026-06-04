@@ -40,7 +40,7 @@ export default function GenConfigModal({ open, title, desc, onClose, onConfirm }
     <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={onClose}>
       <div className="bg-white rounded-card shadow-xl max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-border flex items-center justify-between">
-          <h2 className="text-section-title">{title}</h2>
+          <h2 className="text-lg">{title}</h2>
           <button onClick={onClose} className="text-text-placeholder hover:text-text-main">✕</button>
         </div>
 

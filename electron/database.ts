@@ -214,6 +214,33 @@ function createTables(): void {
 
   // 迁移：canon_facts 增加 details 字段
   try { db.run('ALTER TABLE canon_facts ADD COLUMN details TEXT DEFAULT \'{}\'') } catch {}
+  // 迁移：canon_facts 增加 revealed_level（公开度 0-100）和 dependencies（依赖设定）
+  try { db.run('ALTER TABLE canon_facts ADD COLUMN revealed_level INTEGER DEFAULT 0') } catch {}
+  try { db.run('ALTER TABLE canon_facts ADD COLUMN dependencies TEXT DEFAULT \'{}\'') } catch {}
+  // 迁移：foreshadowing_registry 增加回收条件和揭示比例
+  try { db.run('ALTER TABLE foreshadowing_registry ADD COLUMN reveal_condition TEXT DEFAULT \'\'') } catch {}
+  try { db.run('ALTER TABLE foreshadowing_registry ADD COLUMN reveal_ratio INTEGER DEFAULT 0') } catch {}
+  // 迁移：story_timeline 增加 timeline_id（多时间线支持）
+  try { db.run('ALTER TABLE story_timeline ADD COLUMN timeline_id TEXT DEFAULT \'main\'') } catch {}
+  // 迁移：canon_facts 增加 confidence（置信度）和 source_type（来源权威层级）
+  try { db.run('ALTER TABLE canon_facts ADD COLUMN confidence TEXT DEFAULT \'medium\'') } catch {}
+  try { db.run('ALTER TABLE canon_facts ADD COLUMN source_type TEXT DEFAULT \'auto_extracted\'') } catch {}
+  // v2.3: 冲突记忆表
+  try {
+    db.run(`CREATE TABLE IF NOT EXISTS conflict_facts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      fact_a_id INTEGER,
+      fact_b_id INTEGER,
+      fact_a_text TEXT DEFAULT '',
+      fact_b_text TEXT DEFAULT '',
+      conflict_type TEXT NOT NULL DEFAULT 'contradiction',
+      resolution_status TEXT NOT NULL DEFAULT 'unresolved',
+      detected_chapter INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+    )`)
+  } catch {}
 
   // 迁移：将 character_cards 数据迁入 canon_facts
   try {

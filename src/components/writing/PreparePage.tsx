@@ -82,7 +82,7 @@ export default function PreparePage() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="flex items-center gap-2 text-caption text-text-secondary mb-4">
+      <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <button onClick={() => navigate('/')} className="hover:text-primary">首页</button>
         <span>/</span>
         <span className="text-text-main">{project.title}</span>
@@ -92,16 +92,16 @@ export default function PreparePage() {
 
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-page-title text-text-main">{project.title}</h1>
-          <p className="text-caption text-text-secondary mt-1">🎯 写作准备：情绪定位 + 角色设计 + 世界观</p>
+          <h1 className="text-xl text-text-main">{project.title}</h1>
+          <p className="text-sm text-text-secondary mt-1">🎯 写作准备：情绪定位 + 角色设计 + 世界观</p>
         </div>
         <div className="flex gap-2">
           <button onClick={handleSave} disabled={!prepareContent.trim()}
-            className={`px-4 py-2 rounded-btn text-body transition-colors ${prepareContent.trim() ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
+            className={`px-4 py-2 rounded-btn text-base transition-colors ${prepareContent.trim() ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
             💾 保存
           </button>
           <button onClick={() => navigate(`/project/${id}/outline`)}
-            className="px-4 py-2 bg-primary text-white rounded-btn text-body hover:bg-primary-hover transition-colors">
+            className="px-4 py-2 bg-primary text-white rounded-btn text-base hover:bg-primary-hover transition-colors">
             下一步：大纲 →
           </button>
         </div>
@@ -118,32 +118,32 @@ export default function PreparePage() {
       {!prepareContent && !generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <span className="text-5xl mb-4 block">🎯</span>
-          <h2 className="text-section-title text-text-main mb-2">写作准备</h2>
-          <p className="text-body text-text-secondary mb-2">AI 帮你想清楚：</p>
-          <div className="text-body text-text-secondary mb-6 space-y-1">
+          <h2 className="text-lg text-text-main mb-2">写作准备</h2>
+          <p className="text-base text-text-secondary mb-2">AI 帮你想清楚：</p>
+          <div className="text-base text-text-secondary mb-6 space-y-1">
             <p>① 这本书给读者什么情绪？→ 匹配什么题材？</p>
             <p>② 主角是谁？核心欲望和缺陷是什么？</p>
             <p>③ 有什么可对标参考的作品？</p>
           </div>
           <button onClick={handleGenerate}
-            className="px-6 py-3 bg-primary text-white rounded-btn text-body hover:bg-primary-hover transition-colors">
+            className="px-6 py-3 bg-primary text-white rounded-btn text-base hover:bg-primary-hover transition-colors">
             🤖 开始准备
           </button>
         </div>
       ) : generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-body text-text-main">AI 正在分析选题方向...</p>
-          <p className="text-caption text-text-secondary mt-1">通常需要 20-40 秒</p>
+          <p className="text-base text-text-main">AI 正在分析选题方向...</p>
+          <p className="text-sm text-text-secondary mt-1">通常需要 20-40 秒</p>
         </div>
       ) : (
         <div className="bg-white rounded-card border border-border p-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-section-title text-text-main">创作方案</h2>
-            <button onClick={handleGenerate} className="text-caption text-primary hover:underline">🔄 重新生成</button>
+            <h2 className="text-lg text-text-main">创作方案</h2>
+            <button onClick={handleGenerate} className="text-sm text-primary hover:underline">🔄 重新生成</button>
           </div>
           <textarea value={prepareContent} onChange={(e) => setPrepareContent(e.target.value)}
-            className="w-full min-h-[500px] px-4 py-3 border border-border-input rounded-btn text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed" />
+            className="w-full min-h-[500px] px-4 py-3 border border-border-input rounded-btn text-base focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed" />
         </div>
       )}
     </div>

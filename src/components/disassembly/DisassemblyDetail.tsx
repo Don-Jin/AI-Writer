@@ -139,8 +139,8 @@ export default function DisassemblyDetail() {
 
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-page-title text-text-main">{project.name}</h1>
-          <p className="text-caption text-text-secondary mt-1">
+          <h1 className="text-xl text-text-main">{project.name}</h1>
+          <p className="text-sm text-text-secondary mt-1">
             原文 {(project.source_text || '').length.toLocaleString()} 字 · {project.total_chapters || '?'} 章
           </p>
         </div>

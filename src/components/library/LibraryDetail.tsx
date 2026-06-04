@@ -77,7 +77,7 @@ export default function LibraryDetail() {
   }
 
   if (!library) {
-    return <div className="flex flex-col items-center justify-center py-24 text-text-secondary"><p className="text-body">加载中...</p></div>
+    return <div className="flex flex-col items-center justify-center py-24 text-text-secondary"><p className="text-base">加载中...</p></div>
   }
 
   let p: any = {}
@@ -112,7 +112,7 @@ export default function LibraryDetail() {
           </div>
         ) : (
           <p onClick={startEdit}
-            className="text-body text-text-main cursor-pointer hover:bg-bg-secondary rounded px-1 -mx-1 py-0.5 min-h-[1.5rem]"
+            className="text-base text-text-main cursor-pointer hover:bg-bg-secondary rounded px-1 -mx-1 py-0.5 min-h-[1.5rem]"
             title="点击编辑">
             {currentVal || <span className="text-text-placeholder">点击添加...</span>}
           </p>
@@ -127,7 +127,7 @@ export default function LibraryDetail() {
 
       <div className="bg-white rounded-card border border-border p-6">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-page-title">{library.name}</h1>
+          <h1 className="text-xl">{library.name}</h1>
           {reextracting ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-warning flex items-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 提取中...</span>

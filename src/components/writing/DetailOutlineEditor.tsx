@@ -94,7 +94,7 @@ export default function DetailOutlineEditor() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex items-center gap-2 text-caption text-text-secondary mb-4">
+      <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <button onClick={() => navigate('/')} className="hover:text-primary">首页</button>
         <span>/</span>
         <button onClick={() => navigate(`/project/${id}/outline`)} className="hover:text-primary">{project.title}</button>
@@ -104,16 +104,16 @@ export default function DetailOutlineEditor() {
 
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-page-title text-text-main">{project.title}</h1>
-          <p className="text-caption text-text-secondary mt-1">📑 章节细纲：功能标签 + 情绪目标 + 节奏控制</p>
+          <h1 className="text-xl text-text-main">{project.title}</h1>
+          <p className="text-sm text-text-secondary mt-1">📑 章节细纲：功能标签 + 情绪目标 + 节奏控制</p>
         </div>
         <div className="flex gap-2">
           <button onClick={handleSave} disabled={saving || chapters.length === 0}
-            className={`px-4 py-2 rounded-btn text-body ${chapters.length>0 ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
+            className={`px-4 py-2 rounded-btn text-base ${chapters.length>0 ? 'border border-primary text-primary hover:bg-primary-light' : 'border border-border-input text-text-placeholder cursor-not-allowed'}`}>
             {saving?'保存中...':'💾 保存'}
           </button>
           <button onClick={() => { handleSave(); navigate(`/project/${id}/write`) }} disabled={chapters.length === 0}
-            className={`px-4 py-2 rounded-btn text-body ${chapters.length>0 ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}`}>
+            className={`px-4 py-2 rounded-btn text-base ${chapters.length>0 ? 'bg-primary text-white hover:bg-primary-hover' : 'bg-border text-text-placeholder cursor-not-allowed'}`}>
             开始写作 →
           </button>
         </div>
@@ -128,25 +128,25 @@ export default function DetailOutlineEditor() {
       {chapters.length === 0 && !generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <span className="text-5xl mb-4 block">📑</span>
-          <h2 className="text-section-title text-text-main mb-2">生成章节细纲</h2>
-          <p className="text-body text-text-secondary mb-6">
+          <h2 className="text-lg text-text-main mb-2">生成章节细纲</h2>
+          <p className="text-base text-text-secondary mb-6">
             AI 将根据大纲和参考内容规划逐章纲要，每章标注功能、情绪目标和节奏位置
           </p>
-          <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-body hover:bg-primary-hover">🤖 生成细纲</button>
+          <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-base hover:bg-primary-hover">🤖 生成细纲</button>
         </div>
       ) : generating ? (
         <div className="bg-white rounded-card border border-border p-12 text-center">
           <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-body text-text-main">AI 正在规划章节节奏...</p>
-          <p className="text-caption text-text-secondary mt-1">约需 40-80 秒</p>
+          <p className="text-base text-text-main">AI 正在规划章节节奏...</p>
+          <p className="text-sm text-text-secondary mt-1">约需 40-80 秒</p>
         </div>
       ) : (
         <>
           <div className="flex gap-4 mb-4 flex-wrap">
-            <div className="bg-white rounded-card border border-border px-4 py-2"><span className="text-caption text-text-secondary">总章节：</span><span className="text-body font-medium text-text-main">{chapters.length} 章</span></div>
-            <div className="bg-white rounded-card border border-border px-4 py-2"><span className="text-caption text-text-secondary">预估总字数：</span><span className="text-body font-medium text-text-main">约 {totalWords.toLocaleString()} 字</span></div>
+            <div className="bg-white rounded-card border border-border px-4 py-2"><span className="text-sm text-text-secondary">总章节：</span><span className="text-base font-medium text-text-main">{chapters.length} 章</span></div>
+            <div className="bg-white rounded-card border border-border px-4 py-2"><span className="text-sm text-text-secondary">预估总字数：</span><span className="text-base font-medium text-text-main">约 {totalWords.toLocaleString()} 字</span></div>
             {Object.entries(functionCounts).filter(([k]) => k).slice(0, 4).map(([k, v]) => (
-              <div key={k} className="bg-white rounded-card border border-border px-3 py-2"><span className="text-caption">{k}</span><span className="text-body font-medium text-text-main ml-1">×{v}</span></div>
+              <div key={k} className="bg-white rounded-card border border-border px-3 py-2"><span className="text-sm">{k}</span><span className="text-base font-medium text-text-main ml-1">×{v}</span></div>
             ))}
           </div>
 

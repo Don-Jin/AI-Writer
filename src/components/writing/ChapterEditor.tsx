@@ -158,7 +158,7 @@ export default function ChapterEditor() {
         { role: 'system' as const, content: CHAPTER_SYSTEM },
         { role: 'user' as const, content: CHAPTER_USER(
           project.title, outlineSummary, currentChapter, plan.title,
-          plan.summary, plan.characters, plan.key_events,
+          plan.summary || '', plan.characters || [], plan.key_events || [],
           plan.estimated_words || 3000,
           emotionalGoal, functionTag, endingType,
           styleDesc, plotSummary, characterState, prevExcerpt, disassemblyContext
@@ -232,7 +232,7 @@ export default function ChapterEditor() {
               <button onClick={() => navigate('/')} className="hover:text-primary">首页</button><span>/</span>
               <span className="text-text-main">{project.title}</span>
             </div>
-            <h1 className="text-section-title text-text-main">第 {currentChapter} 章 · {title || '未命名'}</h1>
+            <h1 className="text-lg text-text-main">第 {currentChapter} 章 · {title || '未命名'}</h1>
           </div>
           <div className="flex gap-1.5 relative">
             <button onClick={handleManualSave} disabled={saving || !content.trim()}
@@ -283,19 +283,19 @@ export default function ChapterEditor() {
         {generating ? (
           <div className="bg-white rounded-card border border-border p-16 text-center">
             <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-body text-text-main">AI 正在撰写第 {currentChapter} 章...</p>
+            <p className="text-base text-text-main">AI 正在撰写第 {currentChapter} 章...</p>
             <p className="text-xs text-text-secondary mt-1">约需 40-80 秒</p>
           </div>
         ) : !content ? (
           <div className="bg-white rounded-card border border-border p-16 text-center">
             <span className="text-5xl mb-4 block">✍️</span>
-            <h2 className="text-section-title text-text-main mb-2">第 {currentChapter} 章</h2>
-            <p className="text-body text-text-secondary mb-6">{plan ? '点击按钮，AI 将根据细纲和参考内容生成本章' : '请先生成细纲'}</p>
-            {plan && <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-body hover:bg-primary-hover">🤖 生成本章</button>}
+            <h2 className="text-lg text-text-main mb-2">第 {currentChapter} 章</h2>
+            <p className="text-base text-text-secondary mb-6">{plan ? '点击按钮，AI 将根据细纲和参考内容生成本章' : '请先生成细纲'}</p>
+            {plan && <button onClick={handleGenerate} className="px-6 py-3 bg-primary text-white rounded-btn text-base hover:bg-primary-hover">🤖 生成本章</button>}
           </div>
         ) : (
           <textarea value={content} onChange={(e) => setContent(e.target.value)}
-            className="w-full min-h-[500px] px-5 py-4 border border-border-input rounded-card text-body focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed bg-white" />
+            className="w-full min-h-[500px] px-5 py-4 border border-border-input rounded-card text-base focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20 resize-y leading-relaxed bg-white" />
         )}
       </div>
     </div>
