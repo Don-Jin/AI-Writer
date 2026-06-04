@@ -1,115 +1,88 @@
 # AI 小说写作软件
 
-一款 Windows 桌面 AI 小说写作工具，基于 Electron + React + TypeScript 构建，DeepSeek API 驱动 AI 辅助长篇小说创作。
+一款 Windows 桌面 AI 小说写作工具，基于 Electron + React + TypeScript 构建，DeepSeek API 驱动。从提示词工具进化为**叙事编译器**：Checker 硬约束 + 连续影响力世界模型 + 冲突记忆 + 状态漂移 + 叙事模式选择器。
 
-当前版本：**v1.7.0**
+当前版本：**v2.0.0**
 
 ## 核心功能
 
-- **🔬 拆文库**：导入爆款小说 → AI 拆解黄金三章/剧情结构/爽点模式/可复用套路 → 大纲和卷纲生成时参考
-- **📋 设定库**：导入小说 → AI 提取角色/世界观/规则/关系（含详细描述）→ 大纲卷纲注入完整设定
-- **🎨 风格库**：导入小说 → AI 提取叙事约束/句式数字范围/段落场景配比/词汇档位/情绪档位表 → 正文作为写作边界
-- **🧠 人格库**：导入作者文本 → AI 提取 5 个人味指纹（私人意象/情绪怪癖/节奏指纹/废话风格/私人修辞）→ 正文注入材料池
-- **✍️ 写作工作台**：三栏可折叠布局（章节目录 + 沉浸式编辑器 + 大纲/细纲/校对/设定/伏笔/时间线）
-  - 🌊 流式正文生成：四层递进思考（故事→约束→人味→执行），打字机效果
-  - 📑 卷纲逐卷生成：基于前一卷上下文衔接，17 字段综合卷纲
-  - 📝 逐章细纲：首章黄金开篇 / 普通章连贯设计
-  - ◀▶ 面板折叠：左右面板一键收起，正文自动扩展
-  - 🧹 去 AI 味：本地禁用词扫描 + AI 改写 + 人味注入反规则
-- **📖 事实簿**：5 类事实（角色/设定/规则/关系/事件）+ 硬/软规则 → 生成时自动注入
-- **🪝 伏笔面板**：三栏看板管理，状态切换、优先级色标、回收率统计
-- **⏱ 时间线面板**：6 种事件类型，角色/类型筛选，时间冲突检测
-- **📝 记录官**：每章自动提取摘要/人物/伏笔，下一章自动引用
-- **🔍 智能校对**：6 维检查 → 分章问题卡片 → 自动 find-replace 修改
-- **🔄 版本更新**：设置页一键检查 GitHub Releases 更新，大版本发布时提醒
-- **⚙ 多模型**：DeepSeek / OpenAI / Claude / 通义千问
-- **📥 导出**：TXT / Word / Markdown
+### 四库系统
+- **🔬 拆文库**：导入爆款小说 → AI 拆解结构/爽点/套路 → 注入大纲→卷纲→细纲→正文
+- **📋 设定库**：导入小说 → AI 提取角色/世界/规则/关系 → 注入大纲→卷纲 + 可导入 canon_facts
+- **🎨 风格库**：导入小说 → AI 提取5维写作指纹（叙事/句式/段落/词汇/情绪）→ 🔴硬≤7 🟡软≤12 🔵漂移≤15 分层约束
+- **🧠 人格库**：导入作者文本 → AI 提取5维人味指纹（意象/怪癖/节奏/废话/修辞）→ 注入大纲(轻量)→正文→去AI味
+
+### 叙事编译器引擎 (v2.0)
+- **Checker 三层检测**：① deterministic(关键词+数值) ② structural(事件模式+语义泄露评分5维加权z-score) ③ AI judge(仅建议)
+- **连续影响力模型**：truth_value(0-1) + stability + conflict_weight，Tier Ceilings 防全体硬确定，叙事遗忘曲线
+- **冲突记忆**：conflict_facts 表，矛盾参与 state context 构建，permanent 永久张力
+- **状态漂移**：sigmoid(conflicts+speculative+instability+noiseFloor)，3%不可约噪声基底
+- **叙事模式选择器**：每章自动选择 stable/explore/decay/conflict_peak，权重化 tv/drift/decay
+- **Rewrite Loop**：语义锚点快照 + Jaccard diff + 熔断(max 2次,熵限0.15,语义漂移>35%)
+- **事件提取器 + Canonicalizer**：结构化事件提取 + 4规则合并去重 + 低频保护
+- **StatePatch 统一写入**：genChapter 不再直接写 DB → 5表原子写入
+
+### 三级编辑 + 版本追踪
+- 大纲：全屏 Markdown 编辑，version 自增
+- 卷纲：全屏 JSON 编辑，outline_version + volume_version
+- 细纲：全屏 JSON 编辑，volume_version + plan_version
+- 编辑原则：单向传播，不回溯。已生成内容不可变
+
+### 叙事控制台 (ReviewPanel)
+- 纯渲染：约束健康度 + 结构纵览 + 跨层关联(event↔violation↔伏笔)
+- AI 叙事报告：DO NOT reinterpret/smooth/evaluate，半结构化输出
+- 策略建议：advisory only，不进入 rewrite pipeline
+- 手动干预：fix_prompt 编辑 + autoFixChapter 精确 find-replace
+
+### 工作台
+- 大纲/卷纲(八节点结构)/细纲(plot_beats)/设定(CANON)/校对(控制台)/伏笔/时间线
+- 流式正文生成 + 去AI味(本地扫描+AI改写+人味注入)
+- 多模型(DeepSeek/OpenAI/Claude/通义千问) + TXT/DOCX/MD 导出
 
 ## 更新日志
+
+### v2.0.0 — 叙事编译器架构
+
+| 模块 | 说明 |
+|------|------|
+| 🏗️ Checker 三层 | ①deterministic(关键词+数值) ②structural(事件模式+语义泄露评分5维加权) ③AI judge(仅建议) |
+| 📊 连续影响力 | truth_value+stability+conflict_weight，Tier Ceilings(speculative≤0.6,soft≤0.9)，P5回流+衰减 |
+| ⚡ 冲突记忆 | conflict_facts 表，冲突参与 state context 构建，permanent 永久张力 |
+| 🌊 状态漂移 | computeStateDrift(sigmoid+noiseFloor)，drift 从 checker 参数升级为生成控制层 |
+| 🎭 叙事模式 | selectMode(卷位置%+冲突+漂移)→stable/explore/decay/conflict_peak，权重化三个机制 |
+| 🔄 Rewrite Loop | 语义锚点快照+Jaccard diff+熔断(max2次,语义漂移>35%,熵>0.15) |
+| 📝 事件提取器 | 并行调用，5种事件类型(reveal/action/interaction/world_change/emotion_shift) |
+| 🔗 Canonicalizer | 4规则合并(interaction+reveal/emotion/dedup/reveal⊃world)+低频保护 |
+| 📦 StatePatch | genChapter 不再直接写DB→applyStatePatches 5表统一写入 |
+| 🖊️ 三级编辑 | 大纲Markdown+卷纲JSON+细纲JSON，全屏编辑，版本追踪+代际边界锁 |
+| 🎛️ 叙事控制台 | 约束健康+结构纵览+跨层关联+AI叙事报告(advisory only)+手动干预 |
+| 🎨 约束分层 | 🔴Hard≤7 🟡Soft≤12 🔵Style≤15，buildStyleContext/buildPersonalityContext 重构 |
+| 📥 设定库导入 | CanonFactPanel 从设定库手动导入+source_type权威分层+truth_value滑块+冲突标签 |
+| 🧠 人格注入大纲 | 人格库(imagery+quirks)轻量注入 OUTLINE_USER |
+| 🔙 代际边界锁 | Volume.outline_version + ChapterPlan.volume_version，编辑只影响向下生成 |
+| 🗂️ 组件拆分 | VolumePanel + ReviewPanel + MoreFields 独立组件 |
 
 ### v1.7.0
 
 | 功能 | 说明 |
 |------|------|
-| 🔄 版本更新检查 | 设置页新增检查更新功能，对接 GitHub Releases，仅大版本更新时提醒 |
-| ✍️ 正文四层递进 | CHAPTER_SYSTEM 新增「人味注入」层：情绪毛刺/节奏走神/私人意象/卡壳感/修辞接地气 |
-| 🧹 四库精简 | 拆文库删角色分析/文风/评分；人格库删5个抽象维度只留5个人味指纹 |
+| 🔄 版本更新检查 | 设置页新增检查更新功能，对接 GitHub Releases |
+| ✍️ 正文四层递进 | CHAPTER_SYSTEM 新增「人味注入」层 |
+| 🧹 四库精简 | 拆文库删角色分析/文风/评分；人格库只留5个人味指纹 |
 | 📋 设定库详情注入 | 大纲卷纲注入角色info/abilities/role和世界观description |
-| 🎨 风格库优化 | 提取5精准维度（叙事/句式/语言/段落/氛围），注入从3字段扩展到完整描述 |
-| 🖥️ UI重构 | 配色升级Indigo/Slate，编辑器沉浸式居中，左右面板折叠，标签flex-1挤压 |
+| 🖥️ UI重构 | 配色Indigo/Slate，编辑器沉浸式居中，左右面板折叠 |
 
 ### v1.6.0
 
 | 功能 | 说明 |
 |------|------|
-| ✍️ 正文生成重构 | CHAPTER_SYSTEM 三层递进思考（故事层留住→表达层抓住→落地层执行），回归情绪驱动，删除 50% 冗余技术规则 |
-| 🎯 目标读者 | PREPARE 结果注入正文生成，AI 明确为谁写、读者要什么情绪 |
-| 📉 Token 精简 | 删除重复上下文块（故事背景/人物状态），压缩风格和人格注入，每章输入减少 ~43% |
-| 🎨 风格库压缩 | 删除 raw_analysis 冗余字段，5 行输出压缩为 1 行 |
-| 🧠 人格库压缩 | 每个维度截断 60 字，删除综合分析冗余注入 |
+| ✍️ 正文生成重构 | CHAPTER_SYSTEM 三层递进，回归情绪驱动 |
+| 🎯 目标读者 | PREPARE 结果注入正文生成 |
+| 📉 Token 精简 | 删除重复上下文块，每章输入减少 ~43% |
 
-### v1.5.0
+### v1.5.0 ~ v1.1.0
 
-| 功能 | 说明 |
-|------|------|
-| 🧠 人格库 | 新模块，导入作者访谈/随笔 → AI 提取 5 维写作人格（情感强度/冲突深度/人情温度/语言人格/读者关系） |
-| 🔀 参考选择重构 | 大纲/卷纲：拆文库+设定库（各主+辅）；正文：风格库+人格库（各主+辅） |
-| ✍️ 人格库手动创建 | 无需源文本即可创建空白人格项目，手动填写 5 个维度 |
-| 📂 侧边栏重排 | 首页→拆文库→设定库→风格库→人格库→设置 |
-| 📑 卷纲折叠 | 高级字段默认折叠（节奏设计/伏笔操作/人物里程碑/冲突节点），点击展开 |
-| 🔧 创建白屏修复 | 首页创建项目后 navigate /prepare → /workspace |
-
-### v1.4.0
-
-| 功能 | 说明 |
-|------|------|
-| 📋 设定库 | 左侧栏独立模块，导入小说 → AI 提取角色/世界观/规则/关系 → 手动编辑 → 大纲生成时自动参考 |
-| 📖 事实簿 | 替代角色/世界卡片，5 类事实（角色/设定/规则/关系/事件）+ 硬/软规则，生成时自动注入不可违反 |
-| 🪝 伏笔面板 | 三栏看板式管理（未回收/已回收/全部），状态切换、优先级色标、回收率统计、删除功能 |
-| ⏱ 时间线面板 | 竖线时间线视图，6 种事件类型，角色/类型筛选，时间冲突自动检测，删除功能 |
-| 📐 大纲优化 | 7 部分结构化输出（分卷规划/字数规划/情绪弧线/伏笔地图/人物弧线/主题线/分章框架） |
-| 📑 卷纲优化 | 17 字段综合卷纲（节奏设计/伏笔操作/人物里程碑/冲突节点/承上启下），上下文增强（事实簿+伏笔状态+前卷实际结果） |
-| 🔧 伏笔/时间线删除 | 两个面板均支持删除单条记录 |
-| 🔧 GBK 编码修复 | TXT 文件自动检测 GBK 编码，解决导入乱码和 400 错误 |
-| 🔧 PDF→MD | 拆文库和风格库导入格式从 PDF 改为 Markdown |
-
-### v1.3.0
-
-| 功能 | 说明 |
-|------|------|
-| 📑 卷纲逐卷生成 | 每次只生成一卷，基于前一卷上下文自然衔接，起承转合完整 |
-| 🔬 拆文库重构 | 智能采样（50000字）→ 单次 AI 调用 → 所有维度一次性输出 → 分段独立编辑 |
-| 🎨 风格库重构 | 智能采样 → 单次 AI 调用 → 长段/短段配比分析 |
-| 🎨 风格库重新提取 | 详情页增加重新提取按钮，可切换源文本重新分析 |
-| ⏹ 全局中断 | 大纲/卷纲/细纲/正文/校对/卡片/拆文/风格提取 全部支持一键取消 |
-| 🔧 取消提示统一 | 所有组件取消时显示"已取消生成"，不再误报"生成失败" |
-| 🗑 批量删除 | 角色和世界卡片支持一键清空 |
-| 📋 MD 导出 | 新增 Markdown 导出 |
-| 🔧 JSON 容错 | 四级 JSON 恢复（去尾逗号→去控制字符→修字符串值→正则兜底），解决 AI 返回格式异常 |
-| 🔧 大量修复 | 白屏/递归 bug/表单不填充/流式双份生成/cancel 多次点击 等 |
-
-### v1.2.0
-
-| 功能 | 说明 |
-|------|------|
-| 🤖 卡片自动生成 | 从大纲+拆文库一键生成角色和世界设定 |
-| 📖 卡片从章节提取 | 从选定章节正文提取角色和设定 |
-| 🤖 AI 补全卡片 | 新建角色/设定时输入名称，AI 读取大纲自动填写 |
-| ⏹ 中断生成 | 大纲/卷纲/细纲/正文/校对/卡片 全部支持取消 |
-| 🗑 删除 Token 监控 | 移除不准确的 Token 统计 UI |
-| 🔧 大量修复 | JSON 解析、表单不填充、白屏、递归 bug 等 |
-
-### v1.1.0
-
-| 功能 | 说明 |
-|------|------|
-| 🌊 流式输出 | 正文生成逐字打字机效果 |
-| 🤖 多模型 | DeepSeek / OpenAI / Claude / 通义千问 |
-| 🃏 角色世界卡片 | 结构化角色/世界设定，自动注入生成上下文 |
-| 📝 记录官 | 每章自动摘要/人物/伏笔提取 |
-| 🔍 校对增强 | 逐章问题卡片 + 复制修改提示 + 自动修改 |
-| 📏 段落配比 | 风格库分析长短段比例 |
-| 📋 MD 导出 | 新增 Markdown 导出 |
+参见 git log 或 GitHub Releases。
 
 ---
 
@@ -120,141 +93,33 @@
 | 桌面框架 | Electron 28 |
 | 前端 | React 18 + TypeScript + Tailwind CSS |
 | 状态管理 | Zustand |
-| 数据库 | SQLite (sql.js) |
-| AI API | DeepSeek (兼容 OpenAI SDK) / 多模型 |
-| 文档处理 | mammoth.js / pdf-parse / docx |
+| 数据库 | SQLite (sql.js) — 16 表 |
+| AI API | DeepSeek / OpenAI / Claude / 通义千问 |
 | 构建 | Vite + esbuild + electron-builder |
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-npm install
-```
-
-如果 Electron 二进制下载失败（国内常见问题）：
-
-```bash
-npm config set registry https://registry.npmmirror.com
 npm install
 ```
 
 ### 2. 配置 API Key
 
-启动应用后，进入「设置」页面，选择模型供应商并输入 API Key。
+启动后进入「设置」页面，选择模型并输入 API Key。
 
-- DeepSeek：[platform.deepseek.com](https://platform.deepseek.com)
-- OpenAI：[platform.openai.com](https://platform.openai.com)
-- Claude：[console.anthropic.com](https://console.anthropic.com)
-- 通义千问：[dashscope.aliyun.com](https://dashscope.aliyun.com)
-
-### 3. 启动开发模式
+### 3. 开发
 
 ```bash
 npm run dev
 ```
 
-### 4. 打包 Windows
+### 4. 打包
 
 ```bash
 npm run package
 ```
-
-打包输出在 `release/`，包含 `AI小说写作.exe` 便携版。
-
----
-
-## AI 生成逻辑
-
-### 层级依赖
-
-```
-        PREPARE（准备：情绪→题材→角色→世界观）
-              ↓
-        大纲 ← 拆文库 + 设定库（各主+辅）
-              ↓
-        卷纲 ← 拆文库 + 设定库 + 事实簿 + 伏笔 + 前卷摘要
-              ↓
-      逐章细纲 ← 大纲 + 卷上下文 + 前章细纲 + 风格 + 拆文
-              ↓
-        正文 ← 风格库 + 人格库（各主+辅）+ 事实簿 + 目标读者 + 前章结尾
-              ↓
-        校对（6维检查 → 问题卡片 → 自动修改）
-```
-
-正文采用四层递进思考：**故事层**（留住读者）→ **表达层**（抓住读者）→ **人味注入**（反规则写作）→ **落地层**（执行）。
-
----
-
-### 四大参考库：提取与注入
-
-| 库 | 提取内容 | 注入阶段 | 注入格式 |
-|------|------|------|------|
-| **拆文库** | 黄金三章/剧情结构/爽点模式/可复用套路（4维 Markdown，2000字） | 大纲 + 卷纲 | `【主参考】库名` + 前 1000 字 |
-| **设定库** | 角色(name/info/abilities/role) + 世界观(name/desc/category) + 规则 + 关系 | 大纲 + 卷纲 | `【主设定】库名` + 角色详情 + 世界观详情 |
-| **风格库** | 叙事(视角+距离)/句式节奏/语言(词汇+对话)/段落(比例+习惯)/氛围(基调+情绪) | 章细纲 + 正文 | `【主】库名` + 5 行字段，每库 ~120 字 |
-| **人格库** | 私人意象/情绪怪癖/节奏指纹/废话风格/私人修辞（5 个人味指纹） | 正文 | `【主】库名` + 5 个关键词，每维截断 50 字 |
-
-### 参考库在各阶段的参与
-
-| | PREPARE | 大纲 | 卷纲 | 章细纲 | 正文 |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **拆文库** | — | ✅ 主+辅 | ✅ 主+辅 | ✅ | — |
-| **设定库** | — | ✅ 主+辅 | ✅ 主+辅 | — | — |
-| **风格库** | — | — | — | ✅ | ✅ 主+辅 |
-| **人格库** | — | — | — | — | ✅ 主+辅 |
-| **事实簿** | — | 自动提取 | ✅ | — | ✅ |
-| **目标读者** | 产出 | — | — | — | ✅ |
-| **伏笔注册表** | — | — | ✅ | — | ✅预警 |
-| **记录官摘要** | — | — | ✅前卷 | — | ✅前章 |
-
----
-
-### 📐 大纲
-
-| 项目 | 内容 |
-|------|------|
-| **触发** | 工具栏 → 选择参考（拆文库+设定库，各主+辅）→ 输入提示 → 确定 |
-| **System** | 7 部分：分卷规划/字数规划/情绪弧线/伏笔地图/人物弧线/主题线与冲突/分章框架 |
-| **输入** | PREPARE + 拆文库（5 条学习指令）+ 设定库参考 + 作者提示 |
-| **输出** | Markdown → `outlines` 表 → 自动提取事实簿 |
-
-### 📑 卷纲（逐卷生成）
-
-| 项目 | 内容 |
-|------|------|
-| **触发** | 卷纲面板「生成下一卷」 |
-| **System** | 17 字段 JSON：节奏设计/伏笔操作（新埋/回收/推进）/人物里程碑/冲突节点/承上启下 |
-| **输入** | 大纲 + 拆文库 + 设定库 + 前卷上下文 + 事实簿 + 伏笔状态 + 记录官前卷摘要 |
-| **输出** | JSON → `volumes_{id}` |
-
-### 📝 细纲（逐章生成）
-
-| 项目 | 内容 |
-|------|------|
-| **触发** | 点击某章「生成」或「一键生成全卷」 |
-| **System** | 首章黄金开篇 / 卷首新卷氛围 / 普通章连贯 |
-| **输入** | 大纲(1500字) + 卷上下文 + 前章细纲 + 前章结尾 + 风格 + 拆文 |
-| **输出** | JSON `{chapter_number, title, function, summary, characters, key_events, emotional_goal, estimated_words, ending_type}` |
-
-### ✍️ 正文（流式）
-
-| 项目 | 内容 |
-|------|------|
-| **触发** | 工具栏 → 选择参考（风格库+人格库，各主+辅）→ 输入提示 → 确定 |
-| **System** | 四层递进：故事层(留住)→表达层(抓住)→人味注入(反规则)→落地层(执行) |
-| **输入** | 目标读者(500字) + 章任务 + 前情(300字) + 上章结尾(300字) + 卷上下文(1200字) + 风格(400字) + 人格(400字) + 事实簿 + 角色上下文(HOT+WARM) + 世界设定 |
-| **输出** | 流式打字机 → `chapters` 表 → 自动生成记录官摘要 |
-
-### 🔍 校对 + 自动修改
-
-| 项目 | 内容 |
-|------|------|
-| **触发** | 校对 Tab → 「执行校对」 |
-| **System** | 6 维检查：人物一致性/情节连贯/时间线/伏笔/AI味/设定一致 |
-| **输出** | JSON `{overall_report, chapter_fixes}` → 逐章问题卡片 |
-| **自动修改** | AI 生成 find-replace 对 → 精确匹配替换 → 预览 → 确认保存 |
 
 ---
 
@@ -262,32 +127,31 @@ npm run package
 
 ```
 novel-ai-writer/
-├── electron/              # Electron 主进程
-│   ├── main.ts            # 窗口 + IPC + AI 流式调用 + AbortController
-│   ├── preload.ts         # contextBridge API 桥接
-│   └── database.ts        # SQLite 封装 (11表)
-├── src/                   # React 渲染进程
+├── electron/                # Electron 主进程
+│   ├── main.ts              # 窗口 + IPC + AI 流式调用
+│   ├── preload.ts           # contextBridge API
+│   └── database.ts          # SQLite 封装 (16表)
+├── src/                     # React 渲染进程
 │   ├── components/
-│   │   ├── layout/        # AppLayout + Sidebar
-│   │   ├── writing/       # Workspace + CanonFactPanel + ForeshadowingPanel + TimelinePanel + DeslopPanel
-│   │   ├── library/        # LibraryList + LibraryDetail
-│   │   ├── disassembly/    # DisassemblyList + DisassemblyDetail
-│   │   ├── setting/        # SettingList + SettingDetail (设定库)
-│   │   ├── personality/     # PersonalityList + PersonalityDetail (人格库)
-│   │   ├── project/         # ProjectList (项目管理)
-│   │   ├── settings/        # SettingsPage (多模型配置)
-│   │   └── common/          # Toast / Modal / InlineEdit
+│   │   ├── writing/         # Workspace + VolumePanel + ReviewPanel
+│   │   │                    # + CanonFactPanel + ForeshadowingPanel + TimelinePanel
+│   │   │                    # + DeslopPanel + ChapterEditor
+│   │   ├── library/         # 风格库管理
+│   │   ├── disassembly/     # 拆文库管理
+│   │   ├── setting/         # 设定库管理
+│   │   ├── personality/     # 人格库管理
+│   │   └── common/          # Toast / Modal / ReferenceSelector
 │   ├── services/
-│   │   ├── generator.ts          # 生成 Prompt (大纲/卷纲/细纲/正文/校对)
-│   │   ├── disassembler.ts       # 拆文 Prompt + 智能采样
-│   │   ├── extractor.ts          # 风格提取 Prompt
-│   │   ├── personalityExtractor.ts # 人格提取 Prompt
-│   │   ├── settingExtractor.ts   # 设定提取 Prompt
-│   │   ├── deslop.ts             # 去 AI 味检测 + 改写
-│   │   └── export.ts             # TXT / DOCX / Markdown 导出
-│   ├── store/             # Zustand 状态管理
-│   └── types/             # TypeScript 类型定义
-├── resources/icon.png     # 应用图标
+│   │   ├── generator.ts     # 所有 Prompt 模板 (大纲/卷纲/细纲/正文/记录官/事件提取器/校对/叙事报告)
+│   │   ├── checker.ts       # Checker三层 + 语义泄露 + 连续影响力 + 状态漂移 + StatePatch + 模式选择器
+│   │   ├── deslop.ts        # 去AI味检测+改写
+│   │   ├── extractor.ts     # 风格提取
+│   │   ├── disassembler.ts  # 拆文
+│   │   ├── personalityExtractor.ts # 人格提取
+│   │   ├── settingExtractor.ts     # 设定提取
+│   │   └── export.ts        # TXT/DOCX/MD 导出
+│   ├── store/               # Zustand
+│   └── types/               # TypeScript 类型
 └── package.json
 ```
 
