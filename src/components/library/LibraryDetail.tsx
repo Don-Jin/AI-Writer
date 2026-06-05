@@ -13,7 +13,6 @@ export default function LibraryDetail() {
   const [reextracting, setReextracting] = useState(false)
   const reextractCancelled = useRef(false)
 
-  // 离开时取消提取（不弹toast，由catch处理）
   useEffect(() => {
     return () => {
       if (reextracting) {
@@ -85,41 +84,7 @@ export default function LibraryDetail() {
     p = typeof library.style_profile === 'string' ? JSON.parse(library.style_profile) : (library.style_profile || {})
   } catch { p = {} }
 
-  const Field = ({ label, path, multiline }: { label: string; path: string[]; multiline?: boolean }) => {
-    const [editing, setEditing] = useState(false)
-    const [val, setVal] = useState('')
-    const inputRef = useRef<any>(null)
-
-    const currentVal: string = path.reduce((o: any, k) => (o && o[k]) ? o[k] : '', p as any) || ''
-
-    const startEdit = () => { setVal(currentVal); setEditing(true); setTimeout(() => inputRef.current?.focus(), 50) }
-    const save = () => { updateField(path, val); setEditing(false) }
-
-    return (
-      <div className="mb-2 group">
-        <span className="text-xs text-text-placeholder">{label}</span>
-        {editing ? (
-          <div>
-            {multiline ? (
-              <textarea ref={inputRef} value={val} onChange={(e: any) => setVal(e.target.value)}
-                onBlur={save} onKeyDown={(e: any) => { if (e.key === 'Escape') setEditing(false) }}
-                rows={3} className="w-full px-2 py-1 mt-0.5 text-xs border border-primary rounded resize-y focus:outline-none" />
-            ) : (
-              <input ref={inputRef} value={val} onChange={(e: any) => setVal(e.target.value)}
-                onBlur={save} onKeyDown={(e: any) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
-                className="w-full px-2 py-1 mt-0.5 text-xs border border-primary rounded focus:outline-none" />
-            )}
-          </div>
-        ) : (
-          <p onClick={startEdit}
-            className="text-base text-text-main cursor-pointer hover:bg-bg-secondary rounded px-1 -mx-1 py-0.5 min-h-[1.5rem]"
-            title="点击编辑">
-            {currentVal || <span className="text-text-placeholder">点击添加...</span>}
-          </p>
-        )}
-      </div>
-    )
-  }
+  const isNewFormat = !!(p.writing_style || p.narrative)
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -141,56 +106,85 @@ export default function LibraryDetail() {
         </div>
         <p className="text-xs text-text-placeholder mb-4">💡 点击任意字段直接编辑，失焦自动保存</p>
 
-        {(p.writing_style || p.narrative) ? <>
-        {/* 叙事 */}
-        <Section title="叙事视角与距离">
-          <Field label="视角" path={['narrative', 'perspective']} />
-          <Field label="叙事距离" path={['narrative', 'distance']} multiline />
-        </Section>
-
-        {/* 句式节奏 */}
-        <Section title="句式与节奏">
-          <Field label="句式节奏" path={['sentence_rhythm']} multiline />
-        </Section>
-
-        {/* 语言 */}
-        <Section title="语言特点">
-          <Field label="词汇偏好" path={['language', 'vocabulary']} multiline />
-          <Field label="对话风格" path={['language', 'dialogue']} multiline />
-        </Section>
-
-        {/* 段落 */}
-        <Section title="段落配比">
-          <Field label="段长比例" path={['paragraph', 'ratio']} />
-          <Field label="段落习惯" path={['paragraph', 'habit']} multiline />
-        </Section>
-
-        {/* 氛围 */}
-        <Section title="氛围基调">
-          <Field label="整体基调" path={['atmosphere', 'tone']} />
-          <Field label="情绪表达" path={['atmosphere', 'emotion_style']} multiline />
-        </Section>
+        {isNewFormat ? <>
+          <Section title="叙事视角与距离">
+            <StyleField label="视角" path={['narrative', 'perspective']} profile={p} onSave={updateField} />
+            <StyleField label="叙事距离" path={['narrative', 'distance']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="句式与节奏">
+            <StyleField label="句式节奏" path={['sentence_rhythm']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="语言特点">
+            <StyleField label="词汇偏好" path={['language', 'vocabulary']} profile={p} onSave={updateField} multiline />
+            <StyleField label="对话风格" path={['language', 'dialogue']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="段落配比">
+            <StyleField label="段长比例" path={['paragraph', 'ratio']} profile={p} onSave={updateField} />
+            <StyleField label="段落习惯" path={['paragraph', 'habit']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="氛围基调">
+            <StyleField label="整体基调" path={['atmosphere', 'tone']} profile={p} onSave={updateField} />
+            <StyleField label="情绪表达" path={['atmosphere', 'emotion_style']} profile={p} onSave={updateField} multiline />
+          </Section>
         </> : <>
-        {/* 旧格式 — 兼容 */}
-        <Section title="✍️ 写作风格">
-          <Field label="叙事视角" path={['writing_style', 'narrative_perspective']} multiline />
-          <Field label="句式特点" path={['writing_style', 'sentence_characteristics']} multiline />
-          <Field label="段落配比" path={['writing_style', 'paragraph_ratio']} multiline />
-        </Section>
-        <Section title="💬 语言特点">
-          <Field label="词汇偏好" path={['language_features', 'vocabulary_preference']} multiline />
-        </Section>
-        <Section title="🎭 氛围基调">
-          <Field label="主要氛围" path={['atmosphere', 'primary']} />
-          <Field label="情感基调" path={['atmosphere', 'emotional_tone']} multiline />
-        </Section>
+          <Section title="写作风格">
+            <StyleField label="叙事视角" path={['writing_style', 'narrative_perspective']} profile={p} onSave={updateField} multiline />
+            <StyleField label="句式特点" path={['writing_style', 'sentence_characteristics']} profile={p} onSave={updateField} multiline />
+            <StyleField label="段落配比" path={['writing_style', 'paragraph_ratio']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="语言特点">
+            <StyleField label="词汇偏好" path={['language_features', 'vocabulary_preference']} profile={p} onSave={updateField} multiline />
+          </Section>
+          <Section title="氛围基调">
+            <StyleField label="主要氛围" path={['atmosphere', 'primary']} profile={p} onSave={updateField} />
+            <StyleField label="情感基调" path={['atmosphere', 'emotional_tone']} profile={p} onSave={updateField} multiline />
+          </Section>
         </>}
 
-        {/* 综合分析 */}
-        <Section title="📝 综合分析">
-          <Field label="综合分析" path={['raw_analysis']} multiline />
+        <Section title="综合分析">
+          <StyleField label="综合分析" path={['raw_analysis']} profile={p} onSave={updateField} multiline />
         </Section>
       </div>
+    </div>
+  )
+}
+
+// ========== 子组件（定义在外部，避免每次渲染重建导致 hooks 错乱） ==========
+
+function StyleField({ label, path, profile, onSave, multiline }: {
+  label: string; path: string[]; profile: any; onSave: (path: string[], value: string) => void; multiline?: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+  const inputRef = useRef<any>(null)
+
+  const currentVal: string = path.reduce((o: any, k) => (o && o[k]) ? o[k] : '', profile) || ''
+
+  const startEdit = () => { setVal(currentVal); setEditing(true); setTimeout(() => inputRef.current?.focus(), 50) }
+  const save = () => { onSave(path, val); setEditing(false) }
+
+  return (
+    <div className="mb-2 group">
+      <span className="text-xs text-text-placeholder">{label}</span>
+      {editing ? (
+        <div>
+          {multiline ? (
+            <textarea ref={inputRef} value={val} onChange={(e: any) => setVal(e.target.value)}
+              onBlur={save} onKeyDown={(e: any) => { if (e.key === 'Escape') setEditing(false) }}
+              rows={3} className="w-full px-2 py-1 mt-0.5 text-xs border border-primary rounded resize-y focus:outline-none" />
+          ) : (
+            <input ref={inputRef} value={val} onChange={(e: any) => setVal(e.target.value)}
+              onBlur={save} onKeyDown={(e: any) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+              className="w-full px-2 py-1 mt-0.5 text-xs border border-primary rounded focus:outline-none" />
+          )}
+        </div>
+      ) : (
+        <p onClick={startEdit}
+          className="text-base text-text-main cursor-pointer hover:bg-bg-secondary rounded px-1 -mx-1 py-0.5 min-h-[1.5rem]"
+          title="点击编辑">
+          {currentVal || <span className="text-text-placeholder">点击添加...</span>}
+        </p>
+      )}
     </div>
   )
 }
