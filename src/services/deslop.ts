@@ -450,6 +450,17 @@ export function scoreParagraph(para: string, patterns?: BannedPattern[]): { scor
     } catch { /* 无效正则跳过 */ }
   }
 
+  // 也检查心理描写套路
+  for (const tp of TELLING_PATTERNS) {
+    try {
+      tp.pattern.lastIndex = 0
+      if (tp.pattern.test(para)) {
+        hits.push(`[心理]${tp.name}`)
+        score += 3
+      }
+    } catch { /* 无效正则跳过 */ }
+  }
+
   return { score, hits }
 }
 
@@ -470,7 +481,7 @@ export function deterministicFixParagraphs(
   paragraphs: { index: number; text: string }[],
   patterns?: BannedPattern[]
 ): { paragraphs: { index: number; text: string }[]; replaced: { pattern: string; replacement: string; count: number }[] } {
-  const effective = patterns || DEFAULT_BANNED_PATTERNS
+  const effective = patterns || getEffectivePatterns()
   const replaced: { pattern: string; replacement: string; count: number }[] = []
 
   const fixed = paragraphs.map(p => {
@@ -573,7 +584,7 @@ export interface DeslopLocalReport {
 
 /** 确定性替换——用代码直接替换，不依赖 AI */
 export function deterministicReplace(text: string, patterns?: BannedPattern[]): { text: string; replaced: number; skipped: string[] } {
-  const effective = patterns || DEFAULT_BANNED_PATTERNS
+  const effective = patterns || getEffectivePatterns()
   let result = text
   let replaced = 0
   const skipped: string[] = []

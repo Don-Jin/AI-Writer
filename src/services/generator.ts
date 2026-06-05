@@ -662,6 +662,7 @@ export const CHAPTER_USER = (
   canonFactsContext?: string, personalityContext?: string,
   plotBeats?: string[], emotionalArc?: string, coolMoment?: string,
   forbidden?: string[], sceneCount?: number, maxInfoReveal?: string, emotionCap?: string,
+  openingHook?: { type: string; detail: string }, closingHook?: { type: string; impact: string },
 ) => {
   let prompt = `【📖 小说】《${title}》 第 ${chapterNum} 章：${planTitle}
 
@@ -721,6 +722,13 @@ ${targetReader ? `【🎯 目标读者】\n${targetReader}\n` : ''}`
     prompt += `【📖 事实簿——不可违反】\n${canonFactsContext}\n`
   }
 
+  if (openingHook?.detail) {
+    prompt += `\n【🎣 章首钩子——前100字必须做到】类型：${openingHook.type || '悬念式'}。具体：${openingHook.detail}\n`
+  }
+  if (closingHook?.impact) {
+    prompt += `\n【🪝 章尾钩子——结尾必须做到】类型：${closingHook.type || '动作中断式'}，强度：${closingHook.impact || '强'}\n`
+  }
+
   prompt += `\n${buildBannedWordsInjection()}\n直接输出正文，不要写标题或章节号。结尾必须是钩子（悬念/动作/对话），禁止总结。`
 
   return prompt
@@ -752,6 +760,8 @@ ${lastText.slice(-500)}
   if (emotionalArc) prompt += `\n\n【情绪弧线】${emotionalArc}`
   if (styleContext) prompt += `\n\n【🎨 风格约束】\n${styleContext.slice(0, 1000)}`
   if (personalityContext) prompt += `\n\n【🧠 人格约束】\n${personalityContext.slice(0, 800)}`
+
+  prompt += `\n\n${buildBannedWordsInjection()}`
 
   return prompt
 }

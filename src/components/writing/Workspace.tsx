@@ -1043,6 +1043,24 @@ export default function Workspace() {
       const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
       const volContext = vol ? `【所在卷】第${vol.volume_number}卷《${vol.title}》\n概要：${vol.summary}\n主题：${vol.theme}` : ''
 
+      // 找章节所在节点
+      let nodeContext = ''
+      if (vol) {
+        const volNodes = (vol as any).nodes || []
+        const curNode = volNodes.find((n: any) => {
+          const seg = n.chapter_segment || ''
+          const m = seg.match(/第?(\d+)[-–—至到]第?(\d+)/)
+          if (m) return chapNum >= parseInt(m[1]) && chapNum <= parseInt(m[2])
+          return false
+        })
+        if (curNode) {
+          nodeContext = `\n【当前节点：${curNode.name}】${curNode.task}\n节点内容：${curNode.content || ''}`
+          if (curNode.node_forbidden) nodeContext += `\n⛔ 节点禁区：${curNode.node_forbidden}`
+          if (curNode.emotion_limit) nodeContext += `\n💕 感情限制：${curNode.emotion_limit}`
+          if (curNode.info_quota) nodeContext += `\n🔐 信息配额：${curNode.info_quota}`
+        }
+      }
+
       // 上一章
       const prevCh = chapters.find(c => c.chapter_number === chapNum - 1)
       const prevExcerpt = prevCh?.content?.slice(-800) || ''
@@ -1209,12 +1227,14 @@ export default function Workspace() {
         plan.summary || '', plan.characters || [], plan.key_events || [], plan.estimated_words || 3000,
         planAny.emotional_goal || planAny.emotional_arc || '', planAny.function || '', planAny.ending_type || '自然收尾',
         styleContext, plotSummary, prevExcerpt,
-        (volContext + '\n\n' + prevSummaryContext),
+        (volContext + nodeContext + '\n\n' + prevSummaryContext),
         canonFactsContext, personalityContext,
         plan.plot_beats, plan.emotional_arc, plan.cool_moment,
-        plan.forbidden, plan.scene_count, plan.max_info_reveal, plan.emotion_cap
+        plan.forbidden, plan.scene_count, plan.max_info_reveal, plan.emotion_cap,
+        (plan as any).opening_hook, (plan as any).closing_hook
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
         + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
+        + (infoPermissionContext ? '\n\n' + infoPermissionContext : '')
 
       // 注入智能上下文（按热度分级）
       try {
@@ -1970,12 +1990,36 @@ export default function Workspace() {
     const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
     try {
       const { styleContext, personalityContext } = await getRefs()
+      // 组装续写约束
+      let extraConstraints = ''
+      if (plan?.forbidden?.length) extraConstraints += `\n⛔ 本章禁区：\n${plan.forbidden.map(f => `- ${f}`).join('\n')}`
+      if ((plan as any)?.emotion_cap) extraConstraints += `\n💕 感情上限：${(plan as any).emotion_cap}`
+      if ((plan as any)?.max_info_reveal) extraConstraints += `\n🔐 信息上限：${(plan as any).max_info_reveal}`
+      if (plan?.scene_count) extraConstraints += `\n🎬 场景数：${plan.scene_count}个`
+
+      // 节点上下文
+      const vol = volumes.find(v => selectedChapter >= v.chapter_range[0] && selectedChapter <= v.chapter_range[1])
+      if (vol) {
+        const volNodes = (vol as any).nodes || []
+        const curNode = volNodes.find((n: any) => {
+          const seg = n.chapter_segment || ''
+          const m = seg.match(/第?(\d+)[-–—至到]第?(\d+)/)
+          if (m) return selectedChapter >= parseInt(m[1]) && selectedChapter <= parseInt(m[2])
+          return false
+        })
+        if (curNode) {
+          extraConstraints += `\n📍 当前节点：${curNode.name}（${curNode.task}）`
+          if (curNode.node_forbidden) extraConstraints += `\n⛔ 节点禁区：${curNode.node_forbidden}`
+          if (curNode.emotion_limit) extraConstraints += `\n💕 感情限制：${curNode.emotion_limit}`
+        }
+      }
+
       const reply = await window.electronAPI!.aiChat([
         { role: 'system', content: CONTINUE_SYSTEM },
         { role: 'user', content: CONTINUE_USER(
           editingContent, plan?.plot_beats, (plan as any)?.emotional_arc,
           styleContext, personalityContext
-        ) },
+        ) + extraConstraints },
       ], '续写')
       if (cancelledRef.current) return
       const newContent = editingContent + '\n\n' + (reply || '')
