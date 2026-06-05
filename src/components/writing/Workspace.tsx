@@ -982,7 +982,13 @@ export default function Workspace() {
       newPlan.volume_version = (volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1]) || {} as any).version || 1
       newPlan.plan_version = 1
 
-      const merged = chapterPlans.filter(p => p.chapter_number !== chapNum)
+      // 从 DB 读取最新细纲（避免循环中闭包 state 过期导致覆盖）
+      let latestPlans: ChapterPlan[] = chapterPlans
+      try {
+        const dbRow = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id=?', [Number(id)])
+        if (dbRow?.chapters) { const parsed = JSON.parse(dbRow.chapters); if (Array.isArray(parsed)) latestPlans = parsed }
+      } catch {}
+      const merged = latestPlans.filter(p => p.chapter_number !== chapNum)
       merged.push(newPlan)
       merged.sort((a, b) => a.chapter_number - b.chapter_number)
       await saveChapterPlans(merged)
