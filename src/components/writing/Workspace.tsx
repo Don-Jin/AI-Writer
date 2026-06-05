@@ -1023,7 +1023,7 @@ export default function Workspace() {
 
       // 上一章
       const prevCh = chapters.find(c => c.chapter_number === chapNum - 1)
-      const prevExcerpt = prevCh?.content?.slice(-300) || ''
+      const prevExcerpt = prevCh?.content?.slice(-800) || ''
 
       // 前一章摘要（记录官）
       let prevSummaryContext = ''
