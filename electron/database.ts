@@ -242,6 +242,20 @@ function createTables(): void {
     )`)
   } catch {}
 
+  // v2.6: 版本历史
+  try {
+    db.run(`CREATE TABLE IF NOT EXISTS version_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      content_type TEXT NOT NULL,
+      content_key TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+    )`)
+  } catch {}
+
   // 迁移：将 character_cards 数据迁入 canon_facts
   try {
     const chars = db.exec("SELECT * FROM character_cards")

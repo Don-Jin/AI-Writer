@@ -1142,6 +1142,13 @@ export async function applyStatePatches(
     }
   }
 
+  // 先清理该章节的旧时间线事件（重新生成时避免重复）
+  if (patch.summary?.chapter_number) {
+    await db.run(
+      'DELETE FROM story_timeline WHERE project_id = ? AND chapter_number = ?',
+      [projectId, patch.summary.chapter_number]
+    )
+  }
   if (patch.timeline_events && patch.timeline_events.length > 0) {
     for (const ev of patch.timeline_events) {
       await db.run(
@@ -1151,6 +1158,11 @@ export async function applyStatePatches(
     }
   }
 
+  // 先清理该章的旧角色弧线和关系时间线
+  if (patch.summary?.chapter_number) {
+    await db.run('DELETE FROM character_arc_log WHERE project_id = ? AND chapter_number = ?', [projectId, patch.summary.chapter_number])
+    await db.run('DELETE FROM relationship_timeline WHERE project_id = ? AND chapter_number = ?', [projectId, patch.summary.chapter_number])
+  }
   if (patch.character_arcs && patch.character_arcs.length > 0) {
     for (const ca of patch.character_arcs) {
       await db.run(

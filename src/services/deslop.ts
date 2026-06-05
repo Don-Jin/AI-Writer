@@ -33,7 +33,7 @@ export interface ParagraphScore {
 /** Gate A: AI 高频禁用词/句式（5级毒级） */
 export const DEFAULT_BANNED_PATTERNS: BannedPattern[] = [
   // ***** 最毒级
-  { pattern: '不是……而是', replacement: '直接写后者', category: '句式', level: 5 },
+  { pattern: '不是……而是', replacement: '加情绪词改写：竟然是…而不是 / 我就知道是…不是 / 搞了半天是…', category: '句式', level: 5 },
   // **** 高毒级
   { pattern: '带着一丝', replacement: '拆短句或换动作', category: '句式', level: 4 },
   { pattern: '带着一股', replacement: '拆短句或换动作', category: '句式', level: 4 },
@@ -137,15 +137,23 @@ export function getEffectivePatterns(): BannedPattern[] {
     .filter(d => !customPatterns.has(d.pattern)) // 移除被自定义覆盖的默认
     .concat(customs)
 
-  // 只返回启用的规则，按 level 降序
-  return merged.filter(p => p.enabled !== false).sort((a, b) => b.level - a.level)
+  // 只返回启用的规则，自定义规则置顶，然后按 level 降序
+  return merged.filter(p => p.enabled !== false).sort((a, b) => {
+    const aCustom = a.category === '自定义' ? 0 : 1
+    const bCustom = b.category === '自定义' ? 0 : 1
+    if (aCustom !== bCustom) return aCustom - bCustom
+    return b.level - a.level
+  })
 }
 
 // ==================== 句式套路检测 ====================
 
 /** Gate B: AI 常用句式套路 */
 export const SENTENCE_PATTERNS = [
-  { name: '不是A而是B', pattern: /不是.{2,10}而是/g, fix: '直接写B' },
+  { name: '无情绪否定纠正(不是A而是B)', pattern: /(?:不是|并非|并不是|绝不是|并不是说|不能说|与其说).{1,20}(?:而是|就是|才是|应当是|不如)/g, fix: '无情绪的"不是A而是B"是AI味。加情绪词改写为："竟然是A，不是B""我就知道是A，而不是B""搞了半天是A"——或改为先肯定B再否定A的顺序' },
+  { name: 'AI碎片白描(结果在…)', pattern: /^结果.{0,15}(?:之前|之后|的时候).{0,10}(?:停|断|没|空|消失)/gm, fix: '合并到前一句，或扩展为有具体信息的完整句子' },
+  { name: '人名独段', pattern: /^(?!除非|悬停|然而|但是|于是|接着|然后|原来|结果|可是|只是|而是|还是|或者|因此|如果|虽然|而且|并且|不过|所以|突然|终于|果然|竟然|居然|反正|明明|偏偏|尤其|至少|最多|最少|大概|大约|或许|也许|可能|一定|确实|的确|当然|自然|根本|其实|实在|真正|简直|几乎|似乎|仿佛|好像|依旧|仍然|还是|依然|已经|曾经|正在|将要|将来|即将|立刻|马上|忽然|顿时|瞬间|一下子|一会|一下|这么|那么|各种|大概)[一-鿿]{1,4}。$/gm, fix: '人名单独成段——删掉，把名字融进上下文' },
+  { name: 'AI转场碎片', pattern: /(?:^|\n\n)[^。！？\n]{1,4}。\s*(?:\n\n|$)/gm, fix: '极短独段（1-4字）是AI假装分镜——零信息、零情绪。除非此处确实需要一个强节奏停顿，否则融进前后句' },
   { name: '带着…万能状语', pattern: /，带着.{1,8}(?:的)?/g, fix: '拆成短句，或换具体动作' },
   { name: '仿佛/犹如比喻', pattern: /(?:仿佛|犹如|宛若).{2,15}(?:一般|一样)/g, fix: '删除比喻，直接白描' },
   { name: '总结升华结尾', pattern: /(?:他终于明白|她这才意识到|此刻.{2,10}终于|原来.{2,15}才是)/g, fix: '用动作或对话收尾' },
@@ -153,7 +161,7 @@ export const SENTENCE_PATTERNS = [
   { name: '三连修饰', pattern: /(?:微微|淡淡|轻轻|缓缓|一丝|一抹|些许|几分)(?:.{0,5})(?:微微|淡淡|轻轻|缓缓|一丝|一抹|些许|几分)/g, fix: '去掉修饰词，直接写核心动作' },
   // 深层伪文学模式
   { name: '潜台词显式化', pattern: /(?:意思是|也就是说|这意味着|换句话说|说白了)/g, fix: '删掉解释句，动作本身已传达' },
-  { name: '装饰性否定修正', pattern: /(?:不是|并非)\S{1,5}[，,]\S{1,5}(?:是|而是)/g, fix: '直接写后者。仅当认知真正反转时才保留此句式' },
+  { name: '装饰性否定修正', pattern: /(?:不是|并非)\S{1,5}[，,]\S{1,5}(?:是|而是)/g, fix: '加情绪词或改顺序：先肯定后否定（"是B，不是A"），或加"竟然/原来/我就知道"' },
   { name: '破折号节奏装饰', pattern: /——(?:带着|也不敢|或者说|更像是|仿佛|像是)/g, fix: '删破折号，用正常句子。破折号仅用于真正的信息中断' },
   { name: '连续单句成段(3段以上)', pattern: /(?:^[^。]{1,15}。$\r?\n){3,}/gm, fix: '合并短句或扩展信息量，连续单句段不超过2' },
   { name: '抽象情绪收束', pattern: /(?:像某种|像是.{2,10}(?:一样|似的)|仿佛.{2,15}(?:一般|一样|了))/g, fix: '换成具体动作或感官细节' },
@@ -362,7 +370,7 @@ export const DESLOP_REWRITE_SYSTEM = buildStyledRewriteSystem()
 export const DESLOP_REWRITE_USER = (
   text: string,
   severity: string,
-  opts?: { styleContext?: string; personalityContext?: string; targetParagraphs?: number[] }
+  opts?: { styleContext?: string; personalityContext?: string; targetParagraphs?: number[]; detectedPatterns?: string[] }
 ) => {
   const severityGuide: Record<string, string> = {
     '轻度': '请对文本进行轻度去AI味处理。主要修改：禁用词替换 + 减少对话标签。保留90%以上的原文结构和内容。',
@@ -371,6 +379,13 @@ export const DESLOP_REWRITE_USER = (
   }
 
   let instruction = severityGuide[severity] || severityGuide['中度']
+
+  // 注入具体检测到的模式——硬性要求逐一消除
+  if (opts?.detectedPatterns && opts.detectedPatterns.length > 0) {
+    const uniquePatterns = [...new Set(opts.detectedPatterns)].slice(0, 20)
+    instruction += `\n\n🔴 以下AI写作痕迹已被检测到——必须全部消除，一条不留：\n${uniquePatterns.map(p => `- ${p}`).join('\n')}`
+    instruction += `\n\n消除规则：\n1. 禁用词/禁用句式 → 找到并替换为日常表达\n2. 破折号 → 改用句号或逗号连接\n3. "不是...而是" → 改为直接陈述\n4. 每个标记处都必须修改，不能跳过\n5. 修改后重新检查，确保没有任何残留`
+  }
 
   // 定点改写
   if (opts?.targetParagraphs && opts.targetParagraphs.length > 0) {
@@ -427,9 +442,10 @@ export function scoreParagraph(para: string, patterns?: BannedPattern[]): { scor
   // 也检查句式套路
   for (const sp of SENTENCE_PATTERNS) {
     try {
+      sp.pattern.lastIndex = 0 // 重置 lastIndex，防止多段落循环时污染
       if (sp.pattern.test(para)) {
         hits.push(`[句式]${sp.name}`)
-        score += 3
+        score += 5
       }
     } catch { /* 无效正则跳过 */ }
   }
@@ -446,7 +462,100 @@ export function scoreAllParagraphs(text: string): ParagraphScore[] {
   })
 }
 
-// ==================== 本地快速检测（不需要 AI） ====================
+// ==================== 确定性修复（immutable paragraph pipeline） ====================
+
+/** 确定性修复：对段落数组做 immutable transform，逐段替换禁用词。
+ *  不再需要位置索引——直接对段落文本做 split→replace→join。 */
+export function deterministicFixParagraphs(
+  paragraphs: { index: number; text: string }[],
+  patterns?: BannedPattern[]
+): { paragraphs: { index: number; text: string }[]; replaced: { pattern: string; replacement: string; count: number }[] } {
+  const effective = patterns || DEFAULT_BANNED_PATTERNS
+  const replaced: { pattern: string; replacement: string; count: number }[] = []
+
+  const fixed = paragraphs.map(p => {
+    let text = p.text
+    for (const bp of effective) {
+      if (bp.enabled === false) continue
+      if (!text.includes(bp.pattern)) continue
+
+      let effectiveReplacement: string | null = null
+      const r = bp.replacement
+
+      if (['说', '看到', '笑了', '皱眉', '愣了下', '瞪大眼', '挥手', '接着', '就是', '已经', '没', '小声说'].includes(r)) {
+        effectiveReplacement = r
+      } else if (r.includes('删掉') || r === '删' || r.includes('删除')) {
+        effectiveReplacement = ''
+      } else if (r.includes('句号或逗号')) {
+        effectiveReplacement = '，'
+      } else if (r.includes('胸口')) {
+        effectiveReplacement = r
+      } else {
+        continue // AI 才能处理的，跳过
+      }
+
+      const before = text
+      text = text.split(bp.pattern).join(effectiveReplacement)
+      if (text !== before) {
+        const escaped = bp.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const matches = before.match(new RegExp(escaped, 'g'))
+        const count = matches ? matches.length : 1
+        replaced.push({ pattern: bp.pattern, replacement: effectiveReplacement, count })
+      }
+    }
+    return { index: p.index, text }
+  })
+
+  return { paragraphs: fixed, replaced }
+}
+
+// ==================== 批量 AI 改写 ====================
+
+/** 构建批量改写 prompt：3-5 段一组，标注 [PARA_N]，用 [PARA_END] 分隔输出 */
+export function buildBatchRewritePrompt(
+  badParas: { index: number; text: string; issues: string[] }[]
+): string {
+  const sections = badParas.map((p, i) =>
+    `[PARA_${i + 1}] 原文：
+${p.text}
+
+命中问题：${p.issues.join('、')}
+
+请输出修改后的段落（只输出修改后的文本，不要解释）：`
+  ).join('\n\n---\n\n')
+
+  return `你有 ${badParas.length} 个段落需要修改。每个段落原文和问题如下。请逐个修改后输出，用 [PARA_END] 分隔每个修改后的段落。
+
+改写规则：
+1. 禁用词 → 替换为日常口语表达
+2. 破折号（——）→ 改用句号或逗号连接
+3. "不是...而是"（无情绪版本）→ 加情绪词或改为先肯定后否定
+4. 每处标记的问题都必须修改，不能跳过
+5. 保持原文的剧情、人设、情节不变——只改"怎么说"，不改"说什么"
+6. 不要为了"写得好"而添加原文没有的修饰
+
+${sections}
+
+重要：只输出修改后的段落文本，用 [PARA_END] 分隔。不要输出原文。不要解释。`
+}
+
+// ==================== 轻量完整性检查 ====================
+
+/** 轻量完整性检查：段落是否真的被修改了。
+ *  不做语义判断——只做内容级 + 简单 hash 对比。
+ *  用途：防止 AI 返回与原文完全相同的文本（"假修改"检测）。 */
+export function verifyParagraphRewrite(original: string, rewritten: string): { changed: boolean; hashChanged: boolean } {
+  const trimmedOrig = original.trim()
+  const trimmedNew = rewritten.trim()
+  const changed = trimmedOrig !== trimmedNew
+  // 简单 hash：长度 + 首尾各10字符的快照
+  const origHash = `${trimmedOrig.length}:${trimmedOrig.slice(0, 10)}:${trimmedOrig.slice(-10)}`
+  const newHash = `${trimmedNew.length}:${trimmedNew.slice(0, 10)}:${trimmedNew.slice(-10)}`
+  const hashChanged = origHash !== newHash
+  return { changed, hashChanged }
+}
+
+// ==================== 原有类型 ====================
 
 export interface DeslopLocalReport {
   severity: '轻度' | '中度' | '重度'
@@ -460,6 +569,51 @@ export interface DeslopLocalReport {
   avgSentencesPerParagraph: number
   hasUniformRhythm: boolean
   paragraphScores: ParagraphScore[]
+}
+
+/** 确定性替换——用代码直接替换，不依赖 AI */
+export function deterministicReplace(text: string, patterns?: BannedPattern[]): { text: string; replaced: number; skipped: string[] } {
+  const effective = patterns || DEFAULT_BANNED_PATTERNS
+  let result = text
+  let replaced = 0
+  const skipped: string[] = []
+  for (const p of effective) {
+    if (p.enabled === false) continue
+    if (!text.includes(p.pattern)) continue
+    const r = p.replacement
+    let effectiveReplacement: string | null = null
+
+    // ① 真正可替换的简单词 → 直接替换
+    if (['说', '看到', '笑了', '皱眉', '愣了下', '瞪大眼', '挥手', '接着', '就是', '已经', '没', '小声说'].includes(r)) {
+      effectiveReplacement = r
+    }
+    // ② （删掉）类 → 替换为空字符串
+    else if (r.includes('删掉') || r === '删') {
+      effectiveReplacement = ''
+    }
+    // ③ （删除）类 → 替换为空字符串
+    else if (r.includes('删除')) {
+      effectiveReplacement = ''
+    }
+    // ④ 标点替换
+    else if (r.includes('句号或逗号')) {
+      effectiveReplacement = '，'
+    }
+    // ⑤ 语义替换（如 胸口起伏了一下）
+    else if (r.includes('胸口')) {
+      effectiveReplacement = r
+    }
+    // ⑥ 其余为 AI 处理项（如 用动作展示领悟/换成具体描写）
+    else {
+      skipped.push(p.pattern)
+      continue
+    }
+
+    const before = result.length
+    result = result.split(p.pattern).join(effectiveReplacement)
+    if (result.length !== before) replaced++
+  }
+  return { text: result, replaced, skipped }
 }
 
 /** 本地快速扫描，不需要调用 AI */
@@ -488,6 +642,7 @@ export function localScan(text: string): DeslopLocalReport {
   const sentencePatternHits: string[] = []
   SENTENCE_PATTERNS.forEach(sp => {
     try {
+      sp.pattern.lastIndex = 0 // 重置，防止跨段落/跨扫描污染
       if (sp.pattern.test(text)) sentencePatternHits.push(sp.name)
     } catch { /* 无效正则跳过 */ }
   })

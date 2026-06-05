@@ -4,6 +4,7 @@ import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
 import VolumePanel from './VolumePanel'
 import ReviewPanel from './ReviewPanel'
+import { getEffectivePatterns, saveCustomBannedPatterns } from '../../services/deslop'
 import type { ParagraphScore } from '../../services/deslop'
 import ForeshadowingPanel from './ForeshadowingPanel'
 import TimelinePanel from './TimelinePanel'
@@ -12,6 +13,11 @@ import CanonFactPanel from './CanonFactPanel'
 import {
   PREPARE_SYSTEM, PREPARE_USER,
   OUTLINE_SYSTEM, OUTLINE_USER,
+  OUTLINE_NORMALIZE_SYSTEM, OUTLINE_NORMALIZE_USER,
+  CONTINUE_SYSTEM, CONTINUE_USER,
+  IDEA_SYSTEM, IDEA_USER,
+  GOLDEN_THREE_SYSTEM, GOLDEN_THREE_USER,
+  REVERSE_OUTLINE_SYSTEM, REVERSE_OUTLINE_USER,
   VOLUME_OUTLINE_SYSTEM, VOLUME_OUTLINE_USER,
   DETAIL_OUTLINE_SYSTEM, DETAIL_OUTLINE_USER,
   CHAPTER_SYSTEM, CHAPTER_USER,
@@ -231,19 +237,27 @@ function buildPersonalityContext(
     const prefix = `【🧠 人格约束——${p.id === primaryId ? '主' : '辅'}】${p.name}`
     const soft: string[] = []; const style: string[] = []
 
-    // ── 🟡 软约束（意象+修辞是硬材料池） ──
+    // ── 🟡 软约束（意象+修辞+对话+风景是硬材料池） ──
     const imgs = extractItems(d.private_imagery, 8)
     if (imgs.length) soft.push(`- 私人意象（只能用以下，禁止训练数据套路意象）：\n${imgs.map(i => `  · ${i}`).join('\n')}`)
     const quirks = extractItems(d.emotional_quirks, 5)
     if (quirks.length) soft.push(`- 情绪怪癖（极端情绪下只能这样反应）：\n${quirks.map(q => `  · ${q}`).join('\n')}`)
     const rhetorics = extractItems(d.private_rhetoric, 5)
     if (rhetorics.length) soft.push(`- 私人修辞（比喻必须从以下生长）：\n${rhetorics.map(r => `  · ${r}`).join('\n')}`)
+    const dialogue = extractItems(d.dialogue_fingerprint, 6)
+    if (dialogue.length) soft.push(`- 对话指纹（角色说话方式只能从以下模式中取——情绪表达方式、说多少藏多少、角色声音差异）：\n${dialogue.map(dl => `  · ${dl}`).join('\n')}`)
+    const scenery = extractItems(d.scenery_fingerprint, 5)
+    if (scenery.length) soft.push(`- 风景指纹（景物描写的频率、切入方式、如何通过景写情）：\n${scenery.map(sc => `  · ${sc}`).join('\n')}`)
 
     // ── 🔵 风格漂移 ──
     const rhythm = extractItems(d.rhythm_fingerprint, 5)
     if (rhythm.length) style.push(`- 节奏指纹：\n${rhythm.map(r => `  · ${r}`).join('\n')}`)
     const nonsense = extractItems(d.nonsense_style, 4)
     if (nonsense.length) style.push(`- 废话风格（允许的叙事者行为）：\n${nonsense.map(n => `  · ${n}`).join('\n')}`)
+    const narration = extractItems(d.narrative_distance, 4)
+    if (narration.length) style.push(`- 叙事距离（叙述者离角色多近、是否点评、视角切换）：\n${narration.map(nr => `  · ${nr}`).join('\n')}`)
+    const infoRelease = extractItems(d.info_release, 4)
+    if (infoRelease.length) style.push(`- 信息释放（关键信息通过什么载体、分批还是一次性、伏笔模式）：\n${infoRelease.map(ir => `  · ${ir}`).join('\n')}`)
 
     const sections: string[] = [prefix]
     if (soft.length) sections.push(`🟡 优先遵守（${soft.length}条）：\n${soft.join('\n')}`)
@@ -292,6 +306,81 @@ export default function Workspace() {
   const [fixPreview, setFixPreview] = useState<{ chapterNum: number; original: string; modified: string; skipped: string[] } | null>(null)
   const [showMarks, setShowMarks] = useState(false)
   const [markData, setMarkData] = useState<{ scores: ParagraphScore[]; selected: Set<number> } | null>(null)
+  // 选中文字 → 一键禁用
+  const [banSelection, setBanSelection] = useState<{ text: string; x: number; y: number } | null>(null)
+  const [banFormOpen, setBanFormOpen] = useState(false)
+  // 版本历史
+  const [historyModal, setHistoryModal] = useState<{ type: string; key: string; currentContent: string; onRestore?: (c: string) => void } | null>(null)
+  const [historyList, setHistoryList] = useState<any[]>([])
+  // 灵感脑洞
+  const [ideaInput, setIdeaInput] = useState('')
+  const [ideaData, setIdeaData] = useState<any>(null)
+  const [ideaLoading, setIdeaLoading] = useState(false)
+
+  /** 灵感脑洞生成 */
+  const handleGenerateIdea = async () => {
+    if (!ideaInput.trim()) { showToast('error', '请输入灵感描述'); return }
+    setIdeaLoading(true)
+    cancelledRef.current = false
+    try {
+      const reply = await window.electronAPI!.aiChat([
+        { role: 'system', content: IDEA_SYSTEM },
+        { role: 'user', content: IDEA_USER(ideaInput) },
+      ], '灵感脑洞')
+      if (cancelledRef.current) return
+      const jm = reply.match(/\{[\s\S]*\}/)
+      if (jm) { setIdeaData(JSON.parse(jm[0])); showToast('success', '灵感脑洞已生成') }
+      else showToast('error', 'AI 返回格式异常')
+    } catch (e: any) {
+      if (!cancelledRef.current) showToast('error', '生成失败：' + (e.message || '未知'))
+    } finally { setIdeaLoading(false) }
+  }
+
+  /** 黄金三章生成 */
+  const [goldenLoading, setGoldenLoading] = useState(false)
+  const handleGenerateGoldenThree = async () => {
+    if (!ideaData) return
+    setGoldenLoading(true)
+    cancelledRef.current = false
+    try {
+      const { styleContext, personalityContext } = await getRefs()
+      const reply = await window.electronAPI!.aiChat([
+        { role: 'system', content: GOLDEN_THREE_SYSTEM },
+        { role: 'user', content: GOLDEN_THREE_USER(ideaData, styleContext, personalityContext) },
+      ], '黄金三章')
+      if (cancelledRef.current) return
+      const parts = reply.split(/===\s*第\d+章\s*===/).filter(Boolean)
+      for (let i = 0; i < Math.min(parts.length, 3); i++) {
+        const content = parts[i].trim()
+        if (content) {
+          await saveChapter(i + 1, ideaData.hook?.slice(0, 20) || '黄金三章', content)
+        }
+      }
+      await window.electronAPI.settings.set(`golden_three_${id}`, 'done')
+      showToast('success', '黄金三章已生成')
+      await loadAll()
+    } catch (e: any) {
+      if (!cancelledRef.current) showToast('error', '黄金三章失败：' + (e.message || '未知'))
+    } finally { setGoldenLoading(false) }
+  }
+
+  /** 从黄金三章出大纲 */
+  const handleReverseOutline = async () => {
+    const ch1 = chapters.find(c => c.chapter_number === 1)
+    const ch2 = chapters.find(c => c.chapter_number === 2)
+    const ch3 = chapters.find(c => c.chapter_number === 3)
+    if (!ch1 || !ch2 || !ch3) { showToast('error', '请先生成黄金三章'); return }
+    setGenerating(true)
+    try {
+      const reply = await window.electronAPI!.aiChat([
+        { role: 'system', content: REVERSE_OUTLINE_SYSTEM },
+        { role: 'user', content: REVERSE_OUTLINE_USER(ideaData || {}, [ch1.content, ch2.content, ch3.content]) },
+      ], '反向大纲')
+      await saveOutline(reply)
+      showToast('success', '大纲已从黄金三章提取')
+    } catch (e: any) { showToast('error', '提取失败：' + (e.message || '未知')) }
+    finally { setGenerating(false) }
+  }
 
   // 引用 — 大纲/卷纲用：拆文库 + 设定库
   const [primaryDissId, setPrimaryDissId] = useState<number | null>(null)
@@ -407,14 +496,21 @@ export default function Workspace() {
   const saveChapter = async (num: number, title: string, content: string) => {
     if (!window.electronAPI) return
     const ex = chapters.find(c => c.chapter_number === num)
+    if (ex?.content && ex.content.trim()) await saveVersion('chapter', String(num), ex.content)
     ex
       ? await window.electronAPI.db.run("UPDATE chapters SET title=?, content=?, word_count=?, status='edited', updated_at=datetime('now','localtime') WHERE id=?", [title, content, content.length, ex.id])
       : await window.electronAPI.db.run("INSERT INTO chapters (project_id, chapter_number, title, content, word_count, status) VALUES (?,?,?,?,?,'generated')", [Number(id), num, title, content, content.length])
-    await loadAll()
+    // 更新本地 state，不重载整个项目（避免 setEditingContent 被 loadAll 覆盖）
+    setChapters(prev => {
+      const updated = prev.find(c => c.chapter_number === num)
+      if (updated) return prev.map(c => c.chapter_number === num ? { ...c, content, title, word_count: content.length } : c)
+      return [...prev, { id: ex?.id || 0, project_id: Number(id), chapter_number: num, title, content, word_count: content.length, status: 'generated', created_at: '', updated_at: '' } as Chapter]
+    })
   }
 
   const saveOutline = async (content: string) => {
     if (!window.electronAPI) return
+    if (outlineContent.trim()) await saveVersion('outline', 'outline', outlineContent)
     const ex = await window.electronAPI.db.get('SELECT id FROM outlines WHERE project_id=?', [Number(id)])
     const newVersion = outlineVersion + 1
     ex
@@ -1248,6 +1344,12 @@ export default function Workspace() {
 
               if (!rewritten || cancelledRef.current) break
 
+              // AI 返回与原文相同——跳过无效重写
+              if (rewritten.trim() === activeText.trim()) {
+                showToast('info', 'AI 重写未修改文本，跳过')
+                break
+              }
+
               // 语义 diff：检测重写是否改变了不该变的段落
               const diff = diffSnapshot(snapshot, rewritten, charNames)
               if (!diff.isStable || diff.semanticChangeRatio > 0.35) {
@@ -1369,7 +1471,9 @@ export default function Workspace() {
               }
             }
             await applyStatePatches(window.electronAPI!.db, pid, patch)
-          } catch { /* state write failure is non-blocking */ }
+          } catch (e: any) {
+            console.error('State write failed:', e?.message || e)
+          }
 
           // 7.5. P5: 自动回流新设定到 canon_facts（连续影响力模型 + 冲突检测）
           try {
@@ -1765,6 +1869,140 @@ export default function Workspace() {
     showToast('success', '建议已注入到额外提示框')
   }
 
+  /** 大纲标准化 */
+  const [normalizing, setNormalizing] = useState(false)
+  const handleNormalizeOutline = async () => {
+    if (!fullscreenEdit || !fullscreenEdit.content.trim()) return
+    setNormalizing(true)
+    cancelledRef.current = false
+    try {
+      const reply = await window.electronAPI!.aiChat([
+        { role: 'system', content: OUTLINE_NORMALIZE_SYSTEM },
+        { role: 'user', content: OUTLINE_NORMALIZE_USER(fullscreenEdit.content) },
+      ], '大纲标准化')
+      if (cancelledRef.current) return
+      if (reply) {
+        setFullscreenEdit({ ...fullscreenEdit, content: reply })
+        showToast('success', '大纲已标准化')
+      }
+    } catch (e: any) {
+      if (cancelledRef.current) return
+      showToast('error', '标准化失败：' + (e.message || '未知错误'))
+    } finally {
+      setNormalizing(false)
+    }
+  }
+  const cancelNormalize = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+    setNormalizing(false)
+    showToast('info', '已取消标准化')
+  }
+
+  /** 保存版本历史 */
+  const saveVersion = async (type: string, key: string, content: string) => {
+    if (!window.electronAPI || !content.trim()) return
+    try {
+      const last = await window.electronAPI.db.get(
+        'SELECT MAX(version) as v FROM version_history WHERE project_id = ? AND content_type = ? AND content_key = ?',
+        [Number(id), type, key]
+      )
+      const nextV = (last?.v || 0) + 1
+      await window.electronAPI.db.run(
+        'INSERT INTO version_history (project_id, content_type, content_key, version, content) VALUES (?,?,?,?,?)',
+        [Number(id), type, key, nextV, content]
+      )
+    } catch { /* best effort */ }
+  }
+
+  const loadHistory = async (type: string, key: string) => {
+    if (!window.electronAPI) return
+    try {
+      const rows = await window.electronAPI.db.query(
+        'SELECT * FROM version_history WHERE project_id = ? AND content_type = ? AND content_key = ? ORDER BY version DESC LIMIT 20',
+        [Number(id), type, key]
+      )
+      setHistoryList(rows || [])
+    } catch { setHistoryList([]) }
+  }
+
+  const cancelOperation = () => {
+    cancelledRef.current = true
+    window.electronAPI?.cancelAi()
+    setContinuing(false); setIdeaLoading(false); setGoldenLoading(false)
+    showToast('info', '已取消')
+  }
+
+  /** 续写 */
+  const [continuing, setContinuing] = useState(false)
+  const handleContinue = async () => {
+    if (!editingContent.trim() || !selectedChapter) return
+    setContinuing(true)
+    cancelledRef.current = false
+    const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
+    try {
+      const { styleContext, personalityContext } = await getRefs()
+      const reply = await window.electronAPI!.aiChat([
+        { role: 'system', content: CONTINUE_SYSTEM },
+        { role: 'user', content: CONTINUE_USER(
+          editingContent, plan?.plot_beats, (plan as any)?.emotional_arc,
+          styleContext, personalityContext
+        ) },
+      ], '续写')
+      if (cancelledRef.current) return
+      const newContent = editingContent + '\n\n' + (reply || '')
+      setEditingContent(newContent)
+      const planTitle = plan?.title || `第${selectedChapter}章`
+      await saveChapter(selectedChapter, planTitle, newContent)
+      showToast('success', '续写完成')
+    } catch (e: any) {
+      if (!cancelledRef.current) showToast('error', '续写失败：' + (e.message || '未知错误'))
+    } finally { setContinuing(false) }
+  }
+
+  /** 编辑器选中文字 → 弹出禁用按钮（鼠标） */
+  const handleTextSelect = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+    const ta = e.currentTarget
+    checkSelection(ta, e.clientX, e.clientY)
+  }
+
+  /** 键盘选中（Shift+方向键等） */
+  const handleKeySelect = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Meta' && !e.key.startsWith('Arrow')) return
+    const ta = e.currentTarget
+    const rect = ta.getBoundingClientRect()
+    checkSelection(ta, rect.left + rect.width / 2, rect.top + rect.height / 2)
+  }
+
+  const checkSelection = (ta: HTMLTextAreaElement, x: number, y: number) => {
+    // 延迟一帧，等浏览器更新 selection
+    setTimeout(() => {
+      const start = ta.selectionStart
+      const end = ta.selectionEnd
+      if (start === end) { setBanSelection(null); return }
+      const selected = ta.value.slice(start, end).trim()
+      if (selected.length < 2 || selected.length > 40) { setBanSelection(null); return }
+      setBanSelection({ text: selected, x, y })
+    }, 0)
+  }
+
+  /** 确认添加选中文字为禁用词 */
+  const handleConfirmBan = (level: number) => {
+    if (!banSelection) return
+    const existing = getEffectivePatterns()
+    // 检查是否已存在
+    if (existing.some(p => p.pattern === banSelection.text)) {
+      showToast('info', `"${banSelection.text}" 已在禁用词列表中`)
+      setBanSelection(null)
+      return
+    }
+    const next = [...existing, { pattern: banSelection.text, replacement: '', category: '自定义', level, enabled: true }]
+    saveCustomBannedPatterns(next)
+    showToast('success', `已添加禁用词：${banSelection.text}（L${level}）`)
+    setBanSelection(null)
+    setBanFormOpen(false)
+  }
+
   /** 自动修改单章 */
   const autoFixChapter = async (chNum: number, issues: string[], fixPrompt: string) => {
     if (!window.electronAPI) return
@@ -1967,6 +2205,25 @@ export default function Workspace() {
                 className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
                 {editingContent ? '🔄 重新生成' : '🤖 生成本章'}
               </button>
+            )}
+            {editingContent && (
+              <>
+                <button onClick={() => { loadHistory('chapter', String(selectedChapter)); setHistoryModal({ type: 'chapter', key: String(selectedChapter), currentContent: editingContent }) }}
+                  className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">
+                  📜
+                </button>
+                {continuing ? (
+                  <button onClick={cancelOperation}
+                    className="px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
+                    ⏹ 取消
+                  </button>
+                ) : (
+                  <button onClick={handleContinue} disabled={generating}
+                    className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary disabled:opacity-50">
+                    ✏️ 续写
+                  </button>
+                )}
+              </>
             )}
             <button onClick={handleSave} disabled={saving}
               className="px-3 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light disabled:opacity-50">
@@ -2173,7 +2430,11 @@ export default function Workspace() {
           <div className="px-4 pt-2">
             <DeslopPanel
               content={editingContent}
-              onApply={(c) => { setEditingContent(c); handleSave() }}
+              onApply={(c) => {
+                setEditingContent(c)
+                const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
+                saveChapter(selectedChapter, plan?.title || `第${selectedChapter}章`, c)
+              }}
               styleContext={buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)}
               personalityContext={buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)}
               onMarksChange={(scores, selected) => setMarkData({ scores, selected })}
@@ -2247,11 +2508,44 @@ export default function Workspace() {
               <textarea
                 value={editingContent}
                 onChange={(e) => setEditingContent(e.target.value)}
+                onMouseUp={handleTextSelect}
+                onKeyUp={handleKeySelect}
                 className="w-full h-full min-h-[400px] px-10 py-8 text-base leading-relaxed
                   focus:outline-none focus:shadow-glow rounded-card resize-none
                   bg-white shadow-card placeholder:text-text-placeholder"
                 placeholder="在左侧目录选择章节，点击「生成本章」开始..."
               />
+              {/* 选中文字 → 浮动禁用按钮 */}
+              {banSelection && !banFormOpen && (
+                <div className="fixed z-50" style={{ left: banSelection.x - 60, top: banSelection.y - 40 }}>
+                  <button
+                    onClick={() => setBanFormOpen(true)}
+                    className="px-2 py-1 text-xs bg-danger text-white rounded shadow-lg hover:bg-danger/80 whitespace-nowrap">
+                    🚫 禁用此表达
+                  </button>
+                </div>
+              )}
+              {banSelection && banFormOpen && (
+                <div className="fixed z-50 bg-white border border-border rounded-card shadow-lg p-3" style={{ left: banSelection.x - 100, top: banSelection.y - 50 }}>
+                  <p className="text-xs text-text-main mb-2 truncate max-w-[220px]">添加禁用词："{banSelection.text}"</p>
+                  <div className="flex items-center gap-1 mb-2">
+                    <span className="text-xs text-text-secondary mr-1">毒级：</span>
+                    {[1, 2, 3, 4, 5].map(l => (
+                      <button key={l}
+                        onClick={() => handleConfirmBan(l)}
+                        className={`px-1.5 py-0.5 rounded text-xxs font-medium ${
+                          l >= 4 ? 'bg-red-100 text-red-700 hover:bg-red-200' :
+                          l >= 3 ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' :
+                          'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}>
+                        L{l}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => { setBanSelection(null); setBanFormOpen(false) }}
+                    className="text-xs text-text-placeholder hover:text-text-secondary">取消</button>
+                </div>
+              )}
             </>
           )}
           </div>
@@ -2265,7 +2559,7 @@ export default function Workspace() {
       />
 
       {/* ===== 右栏：工具面板 ===== */}
-      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col" style={{ width: rightCollapsed ? 36 : rightWidth }}>
+      <aside className="shrink-0 bg-bg-secondary/50 flex flex-col min-h-0" style={{ width: rightCollapsed ? 36 : rightWidth }}>
         {/* Tab 切换 */}
         <div className="flex border-b border-border shrink-0 items-center">
           <button onClick={() => setRightCollapsed(!rightCollapsed)}
@@ -2296,25 +2590,72 @@ export default function Workspace() {
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-medium text-text-main">故事大纲</span>
                 <div className="flex gap-2 items-center">
+                  <button onClick={() => { loadHistory('outline', 'outline'); setHistoryModal({ type: 'outline', key: 'outline', currentContent: outlineContent }) }}
+                    className="text-xs text-text-secondary hover:underline">历史</button>
                   <button onClick={() => setFullscreenEdit({ title: '编辑大纲', content: outlineContent, onSave: (c: string) => { saveOutline(c) } })}
-                    className="text-xs text-primary hover:underline">📝 编辑</button>
+                    className="text-xs text-primary hover:underline">编辑</button>
                   {outlineContent && (
                     <button onClick={() => setFullView({ title: '故事大纲', content: outlineContent })}
-                      className="text-xs text-text-secondary hover:underline">📖 查看</button>
+                      className="text-xs text-text-secondary hover:underline">查看</button>
                   )}
                   <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
                     className="text-xs text-primary hover:underline disabled:opacity-50">🔄 重新生成</button>
                 </div>
               </div>
               {outlineContent ? (
-                <pre className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed h-full overflow-auto px-1">
+                <pre className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed px-1">
                   {outlineContent}
                 </pre>
               ) : (
-                <div className="text-center py-8">
-                  <p className="text-xs text-text-placeholder mb-2">尚无大纲</p>
+                <div className="text-center py-4 space-y-3">
+                  <p className="text-xs text-text-placeholder">尚无大纲</p>
                   <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
-                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn">🤖 生成大纲</button>
+                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn">🤖 直接生成大纲</button>
+                  {/* 灵感脑洞 → 黄金三章 → 大纲 流程 */}
+                  <div className="border-t border-border pt-3 mt-3">
+                    <p className="text-xs text-text-secondary mb-2">💡 或者从灵感开始</p>
+                    <textarea value={ideaInput} onChange={e => setIdeaInput(e.target.value)}
+                      placeholder="输入一句话灵感，如：一个能看见死亡倒计时的程序员…"
+                      className="w-full text-xs border border-border-input rounded p-2 resize-none h-16 mb-2"
+                    />
+                    {ideaLoading ? (
+                      <button onClick={cancelOperation}
+                        className="px-3 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
+                        ⏹ 取消
+                      </button>
+                    ) : (
+                      <button onClick={handleGenerateIdea} disabled={!ideaInput.trim()}
+                        className="px-3 py-1 text-xs bg-primary text-white rounded-btn disabled:opacity-50">
+                        💡 生成脑洞
+                      </button>
+                    )}
+                    {ideaData && (
+                      <div className="mt-2 p-2 bg-bg-secondary rounded text-xs text-left space-y-1">
+                        <p><b>核心梗：</b>{ideaData.hook}</p>
+                        <p><b>题材：</b>{ideaData.genre} · <b>基调：</b>{ideaData.tone}</p>
+                        <p><b>主角：</b>{ideaData.prototype}</p>
+                        <div className="flex gap-2 mt-2">
+                          {goldenLoading ? (
+                            <button onClick={cancelOperation}
+                              className="px-2 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
+                              ⏹ 取消
+                            </button>
+                          ) : (
+                            <button onClick={handleGenerateGoldenThree}
+                              className="px-2 py-1 text-xs bg-success text-white rounded-btn disabled:opacity-50">
+                              📖 生成黄金三章
+                            </button>
+                          )}
+                          {chapters.filter(c => c.chapter_number <= 3).length >= 3 && (
+                            <button onClick={handleReverseOutline} disabled={generating}
+                              className="px-2 py-1 text-xs border border-primary text-primary rounded-btn disabled:opacity-50">
+                              📋 从三章出大纲
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -2471,9 +2812,20 @@ export default function Workspace() {
           <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
             <span className="text-sm font-medium text-text-main">✏️ {fullscreenEdit.title}</span>
             <div className="flex gap-2">
+              {normalizing ? (
+                <button onClick={cancelNormalize}
+                  className="px-4 py-2 border border-danger text-danger rounded-btn text-sm hover:bg-danger/10">
+                  ⏹ 取消标准化
+                </button>
+              ) : (
+                <button onClick={handleNormalizeOutline}
+                  className="px-4 py-2 border border-primary text-primary rounded-btn text-sm hover:bg-primary-light">
+                  🔧 标准化
+                </button>
+              )}
               <button onClick={() => { fullscreenEdit.onSave(fullscreenEdit.content); setFullscreenEdit(null) }}
                 className="px-4 py-2 bg-primary text-white rounded-btn text-sm hover:bg-primary-hover">💾 保存并关闭</button>
-              <button onClick={() => setFullscreenEdit(null)}
+              <button onClick={() => { if (normalizing) cancelNormalize(); setFullscreenEdit(null) }}
                 className="px-4 py-2 border border-border-input text-text-secondary rounded-btn text-sm hover:bg-bg-secondary">取消</button>
             </div>
           </div>
@@ -2494,11 +2846,43 @@ export default function Workspace() {
               <h2 className="text-lg text-text-main">{fullView.title}</h2>
               <button onClick={() => setFullView(null)} className="w-8 h-8 flex items-center justify-center rounded-btn hover:bg-bg-secondary text-text-secondary">✕</button>
             </div>
-            <div className="flex-1 overflow-auto p-5">
+            <div className="flex-1 overflow-auto p-5 min-h-0">
               <pre className="text-base text-text-main whitespace-pre-wrap leading-relaxed font-sans">{fullView.content}</pre>
             </div>
             <div className="px-5 py-3 border-t border-border text-right">
               <button onClick={() => setFullView(null)} className="px-4 py-2 bg-primary text-white rounded-btn text-base hover:bg-primary-hover">关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 版本历史弹窗 */}
+      {historyModal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setHistoryModal(null)}>
+          <div className="bg-white rounded-card shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+              <h2 className="text-lg text-text-main">📜 历史版本</h2>
+              <button onClick={() => setHistoryModal(null)} className="w-8 h-8 flex items-center justify-center rounded-btn hover:bg-bg-secondary text-text-secondary">✕</button>
+            </div>
+            <div className="flex-1 overflow-auto p-4 space-y-2 min-h-0">
+              {historyList.length === 0 && <p className="text-sm text-text-placeholder text-center py-8">暂无历史版本</p>}
+              {historyList.map((h: any, i: number) => (
+                <div key={i} className="flex items-center gap-3 p-3 rounded bg-bg-secondary/50 hover:bg-bg-secondary">
+                  <span className="text-xs text-text-secondary font-mono shrink-0">v{h.version}</span>
+                  <span className="text-xs text-text-placeholder shrink-0">{h.created_at?.replace('T', ' ').slice(0, 16) || ''}</span>
+                  <span className="text-xs text-text-main truncate flex-1">{h.content?.slice(0, 50) || ''}…</span>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => { setFullView({ title: `v${h.version} — ${h.created_at?.slice(0, 10) || ''}`, content: h.content }); setHistoryModal(null) }}
+                      className="text-xs text-primary hover:underline">查看</button>
+                    <button onClick={() => {
+                      if (historyModal.type === 'outline') { saveOutline(h.content) }
+                      else if (historyModal.type === 'chapter') { setEditingContent(h.content); saveChapter(Number(historyModal.key), '', h.content) }
+                      else { historyModal.currentContent && historyModal.onRestore?.(h.content) }
+                      setHistoryModal(null)
+                      showToast('success', `已恢复 v${h.version}`)
+                    }} className="text-xs text-danger hover:underline">恢复</button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

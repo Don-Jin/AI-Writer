@@ -268,6 +268,16 @@ export interface CanonFact {
 }
 
 // ========== 冲突记忆 ==========
+export interface VersionHistory {
+  id: number
+  project_id: number
+  content_type: 'outline' | 'chapter_plan' | 'chapter'
+  content_key: string
+  version: number
+  content: string
+  created_at: string
+}
+
 export interface ConflictFact {
   id: number
   project_id: number
@@ -305,6 +315,10 @@ export interface PersonalityProfile {
   rhythm_fingerprint: string     // 节奏指纹：何时加速/走神/停顿
   nonsense_style: string         // 废话风格：叙述者插嘴/角色跑题/重复
   private_rhetoric: string       // 私人修辞：从生活长出的比喻
+  dialogue_fingerprint: string   // 对话指纹：情绪体现、说多少藏多少、角色声音差异
+  scenery_fingerprint: string    // 风景指纹：频率、切入方式、如何以景写情
+  narrative_distance: string     // 叙事距离：叙述者离角色多近、是否点评、视角切换
+  info_release: string           // 信息释放：载体、分批/一次性、伏笔模式
   raw_analysis: string           // 综合分析
 }
 

@@ -87,6 +87,10 @@ export default function PersonalityDetail() {
             rhythm_fingerprint: data.rhythm_fingerprint || '',
             nonsense_style: data.nonsense_style || '',
             private_rhetoric: data.private_rhetoric || '',
+            dialogue_fingerprint: data.dialogue_fingerprint || '',
+            scenery_fingerprint: data.scenery_fingerprint || '',
+            narrative_distance: data.narrative_distance || '',
+            info_release: data.info_release || '',
             raw_analysis: data.raw_analysis || '',
           })
         }
@@ -145,6 +149,10 @@ export default function PersonalityDetail() {
         rhythm_fingerprint: parsed.rhythm_fingerprint || '',
         nonsense_style: parsed.nonsense_style || '',
         private_rhetoric: parsed.private_rhetoric || '',
+        dialogue_fingerprint: parsed.dialogue_fingerprint || '',
+        scenery_fingerprint: parsed.scenery_fingerprint || '',
+        narrative_distance: parsed.narrative_distance || '',
+        info_release: parsed.info_release || '',
         raw_analysis: parsed.raw_analysis || '',
       }
       setProfile(newProfile)
@@ -166,7 +174,7 @@ export default function PersonalityDetail() {
   if (error) return <div className="flex justify-center py-24 text-text-secondary">错误：{error}</div>
   if (!project) return <div className="flex justify-center py-24 text-text-secondary">项目不存在或已被删除 (id={id})</div>
 
-  const hasData = !!(profile.private_imagery || profile.emotional_quirks || profile.rhythm_fingerprint)
+  const hasData = !!(profile.private_imagery || profile.emotional_quirks || profile.rhythm_fingerprint || profile.dialogue_fingerprint)
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -227,6 +235,10 @@ export default function PersonalityDetail() {
         <div className="bg-white rounded-card border border-border p-4">
           <h3 className="text-sm font-medium text-text-main mb-3">私人修辞</h3>
           <Field label="私人修辞" path={['private_rhetoric']} profile={profile} onSave={saveField} />
+          <Field label="对话指纹" path={['dialogue_fingerprint']} profile={profile} onSave={saveField} />
+          <Field label="风景指纹" path={['scenery_fingerprint']} profile={profile} onSave={saveField} />
+          <Field label="叙事距离" path={['narrative_distance']} profile={profile} onSave={saveField} />
+          <Field label="信息释放" path={['info_release']} profile={profile} onSave={saveField} />
         </div>
         {profile.raw_analysis && (
           <div className="bg-white rounded-card border border-border p-4">

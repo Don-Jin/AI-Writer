@@ -134,7 +134,7 @@ function registerIpcHandlers() {
         model: config.model,
         messages: safeMessages,
         temperature: 0.7,
-        max_tokens: 8192,
+        max_tokens: 16384,
       }, { signal: currentAbortController.signal })
 
       if (response.usage) {
@@ -171,7 +171,7 @@ function registerIpcHandlers() {
         model: config.model,
         messages: safeMessages,
         temperature: 0.7,
-        max_tokens: 8192,
+        max_tokens: 16384,
         stream: true,
       }, { signal: currentAbortController.signal })
 
