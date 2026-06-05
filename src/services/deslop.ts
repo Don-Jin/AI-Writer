@@ -152,8 +152,7 @@ export function getEffectivePatterns(): BannedPattern[] {
 export const SENTENCE_PATTERNS = [
   { name: '无情绪否定纠正(不是A而是B)', pattern: /(?:不是|并非|并不是|绝不是|并不是说|不能说|与其说).{1,20}(?:而是|就是|才是|应当是|不如)/g, fix: '无情绪的"不是A而是B"是AI味。加情绪词改写为："竟然是A，不是B""我就知道是A，而不是B""搞了半天是A"——或改为先肯定B再否定A的顺序' },
   { name: 'AI碎片白描(结果在…)', pattern: /^结果.{0,15}(?:之前|之后|的时候).{0,10}(?:停|断|没|空|消失)/gm, fix: '合并到前一句，或扩展为有具体信息的完整句子' },
-  { name: '人名独段', pattern: /^(?!除非|悬停|然而|但是|于是|接着|然后|原来|结果|可是|只是|而是|还是|或者|因此|如果|虽然|而且|并且|不过|所以|突然|终于|果然|竟然|居然|反正|明明|偏偏|尤其|至少|最多|最少|大概|大约|或许|也许|可能|一定|确实|的确|当然|自然|根本|其实|实在|真正|简直|几乎|似乎|仿佛|好像|依旧|仍然|还是|依然|已经|曾经|正在|将要|将来|即将|立刻|马上|忽然|顿时|瞬间|一下子|一会|一下|这么|那么|各种|大概)[一-鿿]{1,4}。$/gm, fix: '人名单独成段——删掉，把名字融进上下文' },
-  { name: 'AI转场碎片', pattern: /(?:^|\n\n)[^。！？\n]{1,4}。\s*(?:\n\n|$)/gm, fix: '极短独段（1-4字）是AI假装分镜——零信息、零情绪。除非此处确实需要一个强节奏停顿，否则融进前后句' },
+  { name: '极短独段(1-4字)', pattern: /(?:^|\n\n)[^。！？\n]{1,4}。\s*(?:\n\n|$)/gm, fix: '极短独段是AI假装分镜——零信息、零情绪。除非此处确实需要一个强节奏停顿，否则融进前后句', enabled: true },
   { name: '带着…万能状语', pattern: /，带着.{1,8}(?:的)?/g, fix: '拆成短句，或换具体动作' },
   { name: '仿佛/犹如比喻', pattern: /(?:仿佛|犹如|宛若).{2,15}(?:一般|一样)/g, fix: '删除比喻，直接白描' },
   { name: '总结升华结尾', pattern: /(?:他终于明白|她这才意识到|此刻.{2,10}终于|原来.{2,15}才是)/g, fix: '用动作或对话收尾' },
@@ -441,6 +440,7 @@ export function scoreParagraph(para: string, patterns?: BannedPattern[]): { scor
 
   // 也检查句式套路
   for (const sp of SENTENCE_PATTERNS) {
+    if ((sp as any).enabled === false) continue
     try {
       sp.pattern.lastIndex = 0 // 重置 lastIndex，防止多段落循环时污染
       if (sp.pattern.test(para)) {
@@ -641,6 +641,7 @@ export function localScan(text: string): DeslopLocalReport {
   // Gate B: 句式套路
   const sentencePatternHits: string[] = []
   SENTENCE_PATTERNS.forEach(sp => {
+    if ((sp as any).enabled === false) return
     try {
       sp.pattern.lastIndex = 0 // 重置，防止跨段落/跨扫描污染
       if (sp.pattern.test(text)) sentencePatternHits.push(sp.name)

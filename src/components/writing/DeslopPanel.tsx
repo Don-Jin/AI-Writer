@@ -4,7 +4,7 @@ import {
   localScan, deterministicFixParagraphs,
   buildBatchRewritePrompt, verifyParagraphRewrite,
   buildStyledRewriteSystem, DESLOP_REWRITE_USER,
-  getEffectivePatterns, saveCustomBannedPatterns, DEFAULT_BANNED_PATTERNS,
+  getEffectivePatterns, saveCustomBannedPatterns, DEFAULT_BANNED_PATTERNS, SENTENCE_PATTERNS,
   splitParagraphs, scoreParagraph, scoreAllParagraphs,
   type DeslopLocalReport, type BannedPattern, type ParagraphScore,
 } from '../../services/deslop'
@@ -703,6 +703,26 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
               ))}
             </div>
             <p className="text-xxs text-text-placeholder">💡 关闭开关临时禁用 · 修改即时生效 · 「自定义」和「风格导入」可删除</p>
+
+            {/* 句式规则开关（正则检测，只能开关不能编辑） */}
+            <div className="mt-3 pt-3 border-t border-border">
+              <p className="text-xs text-text-secondary mb-2">句式检测规则（仅可开关）：</p>
+              <div className="space-y-1 max-h-40 overflow-auto">
+                {SENTENCE_PATTERNS.map((sp, i) => (
+                  <label key={i} className="flex items-center gap-1.5 text-xs py-0.5 cursor-pointer hover:bg-bg-secondary/50 px-1 rounded">
+                    <input
+                      type="checkbox"
+                      checked={(sp as any).enabled !== false}
+                      onChange={() => { (sp as any).enabled = (sp as any).enabled === false }}
+                      className="shrink-0"
+                    />
+                    <span className={`${(sp as any).enabled === false ? 'opacity-40 line-through' : ''}`}>
+                      {sp.name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>
