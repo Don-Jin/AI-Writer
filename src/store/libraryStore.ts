@@ -22,20 +22,25 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         const rows = await window.electronAPI.db.query(
           'SELECT * FROM style_libraries ORDER BY created_at DESC'
         )
-        set({
-          libraries: rows.map((r: any) => ({
-            ...r,
-            style_profile: typeof r.style_profile === 'string'
-              ? JSON.parse(r.style_profile)
-              : r.style_profile,
-          })),
-          loaded: true,
-          loading: false,
+        const parsed = rows.map((r: any) => {
+          try {
+            return {
+              ...r,
+              style_profile: typeof r.style_profile === 'string'
+                ? JSON.parse(r.style_profile)
+                : (r.style_profile || {}),
+            }
+          } catch (e: any) {
+            console.error(`Failed to parse style_profile for library ${r.id}:`, e.message)
+            return { ...r, style_profile: {} }
+          }
         })
+        set({ libraries: parsed, loaded: true, loading: false })
       } else {
         set({ loaded: true, loading: false })
       }
-    } catch {
+    } catch (e: any) {
+      console.error('Failed to load style libraries:', e.message)
       set({ loaded: true, loading: false })
     }
   },

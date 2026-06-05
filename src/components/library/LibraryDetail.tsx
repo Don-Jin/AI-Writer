@@ -79,10 +79,20 @@ export default function LibraryDetail() {
     return <div className="flex flex-col items-center justify-center py-24 text-text-secondary"><p className="text-base">加载中...</p></div>
   }
 
+  // 防御性解析
   let p: any = {}
   try {
-    p = typeof library.style_profile === 'string' ? JSON.parse(library.style_profile) : (library.style_profile || {})
-  } catch { p = {} }
+    const raw = (library as any).style_profile
+    if (typeof raw === 'string') {
+      p = JSON.parse(raw)
+    } else if (raw && typeof raw === 'object') {
+      p = raw
+    }
+    if (!p || typeof p !== 'object') p = {}
+  } catch (e: any) {
+    console.error('LibraryDetail: failed to parse style_profile:', e.message)
+    p = {}
+  }
 
   const isNewFormat = !!(p.writing_style || p.narrative)
 
