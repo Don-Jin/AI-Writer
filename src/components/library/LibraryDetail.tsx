@@ -119,22 +119,29 @@ export default function LibraryDetail() {
         {isNewFormat ? <>
           <Section title="叙事视角与距离">
             <StyleField label="视角" path={['narrative', 'perspective']} profile={p} onSave={updateField} />
-            <StyleField label="叙事距离" path={['narrative', 'distance']} profile={p} onSave={updateField} multiline />
+            <StyleField label="POV规则" path={['narrative', 'pov_rules']} profile={p} onSave={updateField} multiline />
+            <StyleField label="叙述者插嘴" path={['narrative', 'narrator_intrusion']} profile={p} onSave={updateField} multiline />
           </Section>
           <Section title="句式与节奏">
-            <StyleField label="句式节奏" path={['sentence_rhythm']} profile={p} onSave={updateField} multiline />
+            <StyleField label="短句上限(字)" path={['sentence_rhythm', 'short_max']} profile={p} onSave={updateField} />
+            <StyleField label="长句下限(字)" path={['sentence_rhythm', 'long_min']} profile={p} onSave={updateField} />
+            <StyleField label="破例条件" path={['sentence_rhythm', 'exception']} profile={p} onSave={updateField} multiline />
+            <StyleField label="密度" path={['sentence_rhythm', 'density']} profile={p} onSave={updateField} multiline />
           </Section>
           <Section title="语言特点">
-            <StyleField label="词汇偏好" path={['language', 'vocabulary']} profile={p} onSave={updateField} multiline />
-            <StyleField label="对话风格" path={['language', 'dialogue']} profile={p} onSave={updateField} multiline />
+            <StyleField label="词汇档位" path={['language', 'vocab_level']} profile={p} onSave={updateField} multiline />
+            <StyleField label="叙事vs对话" path={['language', 'dialogue_vs_narrative']} profile={p} onSave={updateField} multiline />
+            <StyleField label="禁用词类型" path={['language', 'forbidden_words']} profile={p} onSave={updateField} multiline />
           </Section>
           <Section title="段落配比">
-            <StyleField label="段长比例" path={['paragraph', 'ratio']} profile={p} onSave={updateField} />
+            <StyleField label="按场景类型" path={['paragraph', 'by_scene_type']} profile={p} onSave={updateField} multiline />
             <StyleField label="段落习惯" path={['paragraph', 'habit']} profile={p} onSave={updateField} multiline />
+            <StyleField label="禁止模式" path={['paragraph', 'forbidden']} profile={p} onSave={updateField} multiline />
           </Section>
           <Section title="氛围基调">
-            <StyleField label="整体基调" path={['atmosphere', 'tone']} profile={p} onSave={updateField} />
-            <StyleField label="情绪表达" path={['atmosphere', 'emotion_style']} profile={p} onSave={updateField} multiline />
+            <StyleField label="情绪档位" path={['atmosphere', 'emotion_scale']} profile={p} onSave={updateField} multiline />
+            <StyleField label="升档触发" path={['atmosphere', 'level_triggers']} profile={p} onSave={updateField} multiline />
+            <StyleField label="降档条件" path={['atmosphere', 'must_downgrade']} profile={p} onSave={updateField} multiline />
           </Section>
         </> : <>
           <Section title="写作风格">
@@ -168,7 +175,10 @@ function StyleField({ label, path, profile, onSave, multiline }: {
   const [val, setVal] = useState('')
   const inputRef = useRef<any>(null)
 
-  const currentVal: string = path.reduce((o: any, k) => (o && o[k]) ? o[k] : '', profile) || ''
+  const resolved = path.reduce((o: any, k) => (o && o[k] != null) ? o[k] : undefined, profile)
+  const currentVal: string = resolved === undefined || resolved === null ? ''
+    : typeof resolved === 'string' ? resolved
+    : JSON.stringify(resolved, null, 2)
 
   const startEdit = () => { setVal(currentVal); setEditing(true); setTimeout(() => inputRef.current?.focus(), 50) }
   const save = () => { onSave(path, val); setEditing(false) }
