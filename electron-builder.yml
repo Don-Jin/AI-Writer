@@ -23,6 +23,7 @@ win:
       arch:
         - x64
   icon: resources/icon.png
+  signAndEditExecutable: false
 
 npmRebuild: false
 
