@@ -94,15 +94,32 @@ export default function LibraryDetail() {
     p = {}
   }
 
-  const isNewFormat = !!(p.writing_style || p.narrative)
+  const isV4 = !!(p.replacements)
+  const isV3 = !!(p.narrative)
+  const isV1 = !!(p.writing_style)
+
+  // V4 22类标签分组
+  const V4_GROUPS: { label: string; keys: string[] }[] = [
+    { label: '心理·表情·动作·对话', keys: ['心理', '表情', '动作', '对话'] },
+    { label: '句式·副词·比喻·成语', keys: ['句式', '副词', '比喻', '成语'] },
+    { label: '过渡·总结·结尾·收束', keys: ['过渡', '总结', '结尾', '收束'] },
+    { label: '评判·煽情·描写·泛化', keys: ['评判', '煽情', '描写', '泛化'] },
+    { label: '解释·逃避·猜测·连接词', keys: ['解释', '逃避', '猜测', '连接词'] },
+    { label: '预告·句子·心理遗留', keys: ['预告', '句子', '心理遗留'] },
+  ]
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       <button onClick={() => navigate('/library')} className="px-3 py-1.5 text-xs border border-border-input rounded-btn text-text-secondary hover:bg-bg-secondary hover:text-text-main mb-4 inline-flex items-center gap-1">← 返回风格库</button>
 
       <div className="bg-white rounded-card border border-border p-6">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl">{library.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl">{library.name}</h1>
+            {isV4 && <span className="px-1.5 py-0.5 text-xxs bg-success/10 text-success rounded">V4·替换指南</span>}
+            {isV3 && !isV4 && <span className="px-1.5 py-0.5 text-xxs bg-primary/10 text-primary rounded">V3·约束规则</span>}
+            {isV1 && !isV3 && !isV4 && <span className="px-1.5 py-0.5 text-xxs bg-gray-100 text-text-placeholder rounded">V1·旧格式</span>}
+          </div>
           {reextracting ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-warning flex items-center gap-1"><div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> 提取中...</span>
@@ -110,13 +127,67 @@ export default function LibraryDetail() {
             </div>
           ) : (
             <button onClick={handleReextract} className="px-3 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light/20">
-              🔄 重新提取
+              🔄 重新提取（V4·22类替换指南）
             </button>
           )}
         </div>
         <p className="text-xs text-text-placeholder mb-4">💡 点击任意字段直接编辑，失焦自动保存</p>
 
-        {isNewFormat ? <>
+        {/* ===== V4 替换指南格式 ===== */}
+        {isV4 && (
+          <>
+            {/* 概况 */}
+            {p.style_profile && (
+              <Section title="风格概况">
+                <StyleField label="视角" path={['style_profile', 'perspective']} profile={p} onSave={updateField} />
+                <StyleField label="句长范围" path={['style_profile', 'sentence_range']} profile={p} onSave={updateField} />
+                <StyleField label="段落习惯" path={['style_profile', 'paragraph_habit']} profile={p} onSave={updateField} multiline />
+                <StyleField label="词汇层级" path={['style_profile', 'vocab_level']} profile={p} onSave={updateField} multiline />
+                <StyleField label="情绪基调" path={['style_profile', 'emotion_tone']} profile={p} onSave={updateField} />
+              </Section>
+            )}
+
+            {/* 22类替换指南 — 按分组展示 */}
+            {V4_GROUPS.map(group => {
+              const hasContent = group.keys.some(k => p.replacements[k])
+              if (!hasContent) return null
+              return (
+                <Section key={group.label} title={group.label}>
+                  {group.keys.map(k => {
+                    const dim = p.replacements[k]
+                    if (!dim) return null
+                    return (
+                      <div key={k} className="mb-4 last:mb-0">
+                        <h4 className="text-sm font-medium text-text-main mb-2">{k}</h4>
+                        {/* rule */}
+                        {dim.rule && (
+                          <StyleField label="替换规则" path={['replacements', k, 'rule']} profile={p} onSave={updateField} multiline />
+                        )}
+                        {/* ai_uses */}
+                        {dim.ai_uses?.length > 0 && (
+                          <div className="mb-2">
+                            <span className="text-xs text-danger">❌ AI会用：</span>
+                            <StyleField label="" path={['replacements', k, 'ai_uses']} profile={p} onSave={updateField} multiline />
+                          </div>
+                        )}
+                        {/* human_uses */}
+                        {dim.human_uses?.length > 0 && (
+                          <div className="mb-2">
+                            <span className="text-xs text-success">✅ 人类写法：</span>
+                            <StyleField label="" path={['replacements', k, 'human_uses']} profile={p} onSave={updateField} multiline />
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </Section>
+              )
+            })}
+          </>
+        )}
+
+        {/* ===== V3 约束规则格式（回退） ===== */}
+        {!isV4 && isV3 && <>
           <Section title="叙事视角与距离">
             <StyleField label="视角" path={['narrative', 'perspective']} profile={p} onSave={updateField} />
             <StyleField label="POV规则" path={['narrative', 'pov_rules']} profile={p} onSave={updateField} multiline />
@@ -143,7 +214,10 @@ export default function LibraryDetail() {
             <StyleField label="升档触发" path={['atmosphere', 'level_triggers']} profile={p} onSave={updateField} multiline />
             <StyleField label="降档条件" path={['atmosphere', 'must_downgrade']} profile={p} onSave={updateField} multiline />
           </Section>
-        </> : <>
+        </>}
+
+        {/* ===== V1 旧格式（回退） ===== */}
+        {!isV4 && !isV3 && <>
           <Section title="写作风格">
             <StyleField label="叙事视角" path={['writing_style', 'narrative_perspective']} profile={p} onSave={updateField} multiline />
             <StyleField label="句式特点" path={['writing_style', 'sentence_characteristics']} profile={p} onSave={updateField} multiline />

@@ -30,7 +30,7 @@ export async function initDatabase(): Promise<void> {
 
   // 创建表结构
   createTables()
-  console.log('✓ Database initialized:', DB_PATH)
+  console.log('Database initialized:', DB_PATH)
 }
 
 /** 创建所有表 */
@@ -63,6 +63,8 @@ function createTables(): void {
       description         TEXT DEFAULT '',
       primary_style_id    INTEGER,
       auxiliary_style_ids TEXT DEFAULT '[]',
+      settings            TEXT DEFAULT '{}',
+      chapters_per_volume INTEGER DEFAULT 10,
       status              TEXT NOT NULL DEFAULT 'outline',
       created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       updated_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -95,6 +97,7 @@ function createTables(): void {
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id     INTEGER NOT NULL,
       chapter_number INTEGER NOT NULL,
+      volume_number  INTEGER,
       title          TEXT NOT NULL DEFAULT '',
       content        TEXT NOT NULL DEFAULT '',
       word_count     INTEGER NOT NULL DEFAULT 0,
@@ -103,6 +106,28 @@ function createTables(): void {
       updated_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE,
       UNIQUE(project_id, chapter_number)
+    );
+
+    -- 卷纲
+    CREATE TABLE IF NOT EXISTS volumes (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id      INTEGER NOT NULL,
+      volume_number   INTEGER NOT NULL,
+      title           TEXT NOT NULL DEFAULT '',
+      theme           TEXT DEFAULT '',
+      summary         TEXT DEFAULT '',
+      detailed_summary TEXT DEFAULT '',
+      chapter_range   TEXT NOT NULL DEFAULT '[0,0]',
+      nodes           TEXT DEFAULT '[]',
+      timeline_context TEXT DEFAULT '{}',
+      chapter_summaries TEXT DEFAULT '[]',
+      global_info_quota TEXT DEFAULT '',
+      emotion_stage   TEXT DEFAULT '{}',
+      volume_forbidden TEXT DEFAULT '[]',
+      outline_version INTEGER DEFAULT 0,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
     );
 
     -- Token 用量记录
@@ -116,7 +141,6 @@ function createTables(): void {
       total_tokens   INTEGER NOT NULL DEFAULT 0,
       created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
-
     CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage(created_at);
 
     -- 拆文项目
@@ -126,206 +150,111 @@ function createTables(): void {
       source_text        TEXT NOT NULL DEFAULT '',
       total_chapters     INTEGER NOT NULL DEFAULT 0,
       current_stage      INTEGER NOT NULL DEFAULT 0,
-      -- 0=概要, 1=黄金三章, 2=逐章摘要, 3=聚合分析, 4=文风, 5=完成
       stage_results      TEXT NOT NULL DEFAULT '{}',
-      -- JSON: { stage0: {...}, stage1: {...}, ... }
       created_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       updated_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
-    -- 上下文状态（长篇写作一致性维护）
-    CREATE TABLE IF NOT EXISTS context_state (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id      INTEGER NOT NULL UNIQUE,
-      character_state TEXT NOT NULL DEFAULT '{}',
-      plot_summary    TEXT NOT NULL DEFAULT '',
-      last_chapter    INTEGER NOT NULL DEFAULT 0,
-      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+    -- 设定库
+    CREATE TABLE IF NOT EXISTS setting_libraries (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      name         TEXT NOT NULL,
+      source_text  TEXT NOT NULL DEFAULT '',
+      setting_data TEXT NOT NULL DEFAULT '{}',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
-    -- 角色卡片（结构化角色管理）
-    CREATE TABLE IF NOT EXISTS character_cards (
+    -- 人格库
+    CREATE TABLE IF NOT EXISTS personality_projects (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id      INTEGER NOT NULL,
       name            TEXT NOT NULL,
-      role_type       TEXT NOT NULL DEFAULT 'main',
-      personality     TEXT DEFAULT '',
-      background      TEXT DEFAULT '',
-      appearance      TEXT DEFAULT '',
-      abilities       TEXT DEFAULT '',
-      relationships   TEXT DEFAULT '[]',
-      status_tracking TEXT DEFAULT '{}',
-      notes           TEXT DEFAULT '',
+      source_text     TEXT NOT NULL DEFAULT '',
+      personality_data TEXT NOT NULL DEFAULT '{}',
       created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
-    -- 世界设定卡片
-    CREATE TABLE IF NOT EXISTS world_settings (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id      INTEGER NOT NULL,
-      category        TEXT NOT NULL DEFAULT 'general',
-      name            TEXT NOT NULL,
-      description     TEXT DEFAULT '',
-      details         TEXT DEFAULT '',
-      trigger_keywords TEXT DEFAULT '',
-      priority        INTEGER NOT NULL DEFAULT 0,
-      is_global       INTEGER NOT NULL DEFAULT 0,
-      notes           TEXT DEFAULT '',
-      created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      updated_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    -- 版本历史
+    CREATE TABLE IF NOT EXISTS version_history (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id   INTEGER NOT NULL,
+      content_type TEXT NOT NULL,
+      content_key  TEXT NOT NULL,
+      version      INTEGER NOT NULL DEFAULT 1,
+      content      TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
-    );
-
-    -- 章节摘要（记录官 — 自动提取）
-    CREATE TABLE IF NOT EXISTS chapter_summaries (
-      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id            INTEGER NOT NULL,
-      chapter_number        INTEGER NOT NULL,
-      summary               TEXT NOT NULL DEFAULT '',
-      characters_appeared   TEXT DEFAULT '[]',
-      locations             TEXT DEFAULT '[]',
-      key_events            TEXT DEFAULT '[]',
-      foreshadowing_planted TEXT DEFAULT '[]',
-      foreshadowing_recovered TEXT DEFAULT '[]',
-      character_changes     TEXT DEFAULT '{}',
-      world_changes         TEXT DEFAULT '{}',
-      created_at            TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE,
-      UNIQUE(project_id, chapter_number)
     );
   `)
 
-  // Tier 3 迁移：角色成长 + 关系演变
-  try { db.run('CREATE TABLE IF NOT EXISTS character_arc_log (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, character_name TEXT NOT NULL, chapter_number INTEGER NOT NULL, change_type TEXT NOT NULL, change_description TEXT NOT NULL, before_state TEXT DEFAULT \'\', after_state TEXT DEFAULT \'\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
-  try { db.run('CREATE INDEX IF NOT EXISTS idx_arc_log_char ON character_arc_log(project_id, character_name, chapter_number)') } catch {}
-  try { db.run('CREATE TABLE IF NOT EXISTS relationship_timeline (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, char_a TEXT NOT NULL, char_b TEXT NOT NULL, chapter_number INTEGER NOT NULL, relation_type TEXT NOT NULL DEFAULT \'ally\', intimacy_level INTEGER NOT NULL DEFAULT 50, change_description TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
+  // ━━━ 新数据库（v4.0 状态机架构）━━━
 
-  // Tier 1 迁移：v1.4 新表（如果已存在则跳过）
-  try { db.run('CREATE TABLE IF NOT EXISTS foreshadowing_registry (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, foreshadow_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'planted\', priority TEXT NOT NULL DEFAULT \'normal\', planted_chapter INTEGER, target_chapter INTEGER, resolved_chapter INTEGER, related_characters TEXT DEFAULT \'[]\', notes TEXT DEFAULT \'\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE, UNIQUE(project_id, foreshadow_id))') } catch {}
-  try { db.run('CREATE TABLE IF NOT EXISTS story_timeline (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, chapter_number INTEGER NOT NULL, event_order INTEGER NOT NULL DEFAULT 0, event_description TEXT NOT NULL, time_label TEXT DEFAULT \'\', absolute_day INTEGER, location TEXT DEFAULT \'\', characters_involved TEXT DEFAULT \'[]\', event_type TEXT DEFAULT \'plot\', is_major INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
-  try { db.run('CREATE INDEX IF NOT EXISTS idx_timeline_project ON story_timeline(project_id, absolute_day)') } catch {}
-  try { db.run('CREATE TABLE IF NOT EXISTS canon_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, fact_category TEXT NOT NULL DEFAULT \'setting\', fact_key TEXT NOT NULL, fact_value TEXT NOT NULL, established_chapter INTEGER, last_verified INTEGER, is_hard_rule INTEGER NOT NULL DEFAULT 0, verification_status INTEGER NOT NULL DEFAULT 0, source TEXT DEFAULT \'\', notes TEXT DEFAULT \'\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE)') } catch {}
-
-  // 迁移：为旧数据库添加 cached_tokens 列
-  try { db.run('ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0') } catch {}
-
-  // 迁移：canon_facts 增加 details 字段
-  try { db.run('ALTER TABLE canon_facts ADD COLUMN details TEXT DEFAULT \'{}\'') } catch {}
-  // 迁移：canon_facts 增加 revealed_level（公开度 0-100）和 dependencies（依赖设定）
-  try { db.run('ALTER TABLE canon_facts ADD COLUMN revealed_level INTEGER DEFAULT 0') } catch {}
-  try { db.run('ALTER TABLE canon_facts ADD COLUMN dependencies TEXT DEFAULT \'{}\'') } catch {}
-  // 迁移：foreshadowing_registry 增加回收条件和揭示比例
-  try { db.run('ALTER TABLE foreshadowing_registry ADD COLUMN reveal_condition TEXT DEFAULT \'\'') } catch {}
-  try { db.run('ALTER TABLE foreshadowing_registry ADD COLUMN reveal_ratio INTEGER DEFAULT 0') } catch {}
-  // 迁移：story_timeline 增加 timeline_id（多时间线支持）
-  try { db.run('ALTER TABLE story_timeline ADD COLUMN timeline_id TEXT DEFAULT \'main\'') } catch {}
-  // 迁移：canon_facts 增加 confidence（置信度）和 source_type（来源权威层级）
-  try { db.run('ALTER TABLE canon_facts ADD COLUMN confidence TEXT DEFAULT \'medium\'') } catch {}
-  try { db.run('ALTER TABLE canon_facts ADD COLUMN source_type TEXT DEFAULT \'auto_extracted\'') } catch {}
-  // v2.3: 冲突记忆表
+  // 核心状态表
   try {
-    db.run(`CREATE TABLE IF NOT EXISTS conflict_facts (
+    db.run(`CREATE TABLE IF NOT EXISTS story_tracker (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
-      fact_a_id INTEGER,
-      fact_b_id INTEGER,
-      fact_a_text TEXT DEFAULT '',
-      fact_b_text TEXT DEFAULT '',
-      conflict_type TEXT NOT NULL DEFAULT 'contradiction',
-      resolution_status TEXT NOT NULL DEFAULT 'unresolved',
-      detected_chapter INTEGER,
+      tier TEXT NOT NULL,
+      volume_number INTEGER DEFAULT 0,
+      chapter_number INTEGER DEFAULT 0,
+      tracker_type TEXT NOT NULL,
+      tracker_key TEXT NOT NULL,
+      importance TEXT DEFAULT 'minor',
+      summary TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT '{}',
+      expected_state TEXT DEFAULT NULL,
+      status TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE,
+      UNIQUE(project_id, tier, volume_number, chapter_number, tracker_type, tracker_key)
+    )`)
+    db.run('CREATE INDEX IF NOT EXISTS idx_tracker_lookup ON story_tracker(project_id, tier, volume_number, chapter_number)')
+    db.run('CREATE INDEX IF NOT EXISTS idx_tracker_type ON story_tracker(project_id, tracker_type, tier)')
+  } catch {}
+
+  // 状态迁移日志（只追加）
+  try {
+    db.run(`CREATE TABLE IF NOT EXISTS tracker_transitions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      chapter_number INTEGER NOT NULL,
+      tracker_key TEXT NOT NULL,
+      tracker_type TEXT NOT NULL,
+      old_state TEXT,
+      new_state TEXT,
+      transition_valid INTEGER DEFAULT 1,
+      rule_violation TEXT DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
     )`)
+    db.run('CREATE INDEX IF NOT EXISTS idx_transitions ON tracker_transitions(project_id, tracker_key, chapter_number)')
   } catch {}
 
-  // v2.6: 版本历史
+  // 卷检查报告
   try {
-    db.run(`CREATE TABLE IF NOT EXISTS version_history (
+    db.run(`CREATE TABLE IF NOT EXISTS volume_check_reports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
-      content_type TEXT NOT NULL,
-      content_key TEXT NOT NULL,
-      version INTEGER NOT NULL DEFAULT 1,
-      content TEXT NOT NULL,
+      volume_number INTEGER NOT NULL,
+      results TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
       FOREIGN KEY (project_id) REFERENCES novel_projects(id) ON DELETE CASCADE
     )`)
+    db.run('CREATE INDEX IF NOT EXISTS idx_vcr ON volume_check_reports(project_id, volume_number)')
   } catch {}
 
-  // 迁移：将 character_cards 数据迁入 canon_facts
-  try {
-    const chars = db.exec("SELECT * FROM character_cards")
-    if (chars.length > 0) {
-      const cols = chars[0].columns
-      const rows = chars[0].values
-      for (const row of rows) {
-        const obj: any = {}
-        cols.forEach((c: string, i: number) => { obj[c] = row[i] })
-        const details: any = {}
-        if (obj.personality) details.personality = obj.personality
-        if (obj.background) details.background = obj.background
-        if (obj.appearance) details.appearance = obj.appearance
-        if (obj.abilities) details.abilities = obj.abilities
-        if (obj.relationships) details.relationships = obj.relationships
-        if (obj.status_tracking) details.status_tracking = obj.status_tracking
-        if (obj.role_type) details.role_type = obj.role_type
-        db.run(
-          "INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details) VALUES (?, 'character', ?, ?, 1, '卡片迁移', ?)",
-          [obj.project_id, obj.name, obj.notes || obj.personality?.slice(0, 200) || '', JSON.stringify(details)]
-        )
-      }
-    }
-  } catch {}
-
-  // 迁移：将 world_settings 数据迁入 canon_facts
-  try {
-    const worlds = db.exec("SELECT * FROM world_settings")
-    if (worlds.length > 0) {
-      const cols = worlds[0].columns
-      const rows = worlds[0].values
-      for (const row of rows) {
-        const obj: any = {}
-        cols.forEach((c: string, i: number) => { obj[c] = row[i] })
-        const details: any = {}
-        if (obj.description) details.description = obj.description
-        if (obj.details) details.inner_details = obj.details
-        if (obj.trigger_keywords) details.trigger_keywords = obj.trigger_keywords
-        if (obj.priority) details.priority = obj.priority
-        if (obj.is_global) details.is_global = obj.is_global
-        if (obj.notes) details.notes_text = obj.notes
-        db.run(
-          "INSERT OR IGNORE INTO canon_facts (project_id, fact_category, fact_key, fact_value, is_hard_rule, source, details) VALUES (?, 'setting', ?, ?, 1, '卡片迁移', ?)",
-          [obj.project_id, obj.name, (obj.description || '').slice(0, 200), JSON.stringify(details)]
-        )
-      }
-    }
-  } catch {}
-
-  // 迁移后删除旧表
-  try { db.run('DROP TABLE IF EXISTS character_cards') } catch {}
-  try { db.run('DROP TABLE IF EXISTS world_settings') } catch {}
-
-  // 设定库
-  try {
-    db.run('CREATE TABLE IF NOT EXISTS setting_libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', setting_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
-    // 验证表存在
-    const test = db.exec('SELECT name FROM sqlite_master WHERE type=\'table\' AND name=\'setting_libraries\'')
-    if (test.length === 0 || test[0].values.length === 0) {
-      console.error('FAILED to create setting_libraries table!')
-    }
-  } catch (e) {
-    console.error('Error creating setting_libraries:', e)
-  }
-
-  // 人格库
-  try {
-    db.run('CREATE TABLE IF NOT EXISTS personality_projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, source_text TEXT NOT NULL DEFAULT \'\', personality_data TEXT NOT NULL DEFAULT \'{}\', created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')), updated_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
-  } catch (e) {
-    console.error('Error creating personality_projects:', e)
+  // 删除旧表（v3.x 遗留）
+  const oldTables = [
+    'canon_facts', 'canon_events', 'character_snapshots', 'cross_volume_checks',
+    'auto_continue_queue', 'context_snapshots', 'correction_queue',
+    'foreshadowing_registry', 'story_timeline', 'conflict_facts',
+    'chapter_summaries', 'chapter_fact_deltas', 'context_state',
+    'character_arc_log', 'relationship_timeline',
+  ]
+  for (const t of oldTables) {
+    try { db.run(`DROP TABLE IF EXISTS ${t}`) } catch {}
   }
 
   // 插入默认设置
@@ -369,10 +298,8 @@ export function run(sql: string, params?: any[]): { changes: number; lastInsertR
     const r = db.exec("SELECT last_insert_rowid() AS id")
     if (r.length > 0 && r[0].values.length > 0) lastId = r[0].values[0][0] as number || 0
   } catch {}
-  // Fallback: if last_insert_rowid() returns 0, try to get the max id
   if (lastId === 0 && sql.trim().toUpperCase().startsWith('INSERT')) {
     try {
-      // Extract table name from INSERT INTO "table" ...
       const m = sql.match(/INSERT\s+INTO\s+["'`]?(\w+)/i)
       if (m) {
         const r = db.exec(`SELECT MAX(id) AS mid FROM ${m[1]}`)

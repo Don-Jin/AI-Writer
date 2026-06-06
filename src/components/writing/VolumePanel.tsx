@@ -10,15 +10,16 @@ interface Props {
   generating: boolean
   outlineContent: string
   outlineVersion: number
-  showGenPanel: 'outline' | 'volumes' | 'chapter' | null
-  setShowGenPanel: (v: 'outline' | 'volumes' | 'chapter' | null) => void
+  showGenPanel: 'outline' | 'volumes' | 'chapter' | 'detail' | null
+  setShowGenPanel: (v: 'outline' | 'volumes' | 'chapter' | 'detail' | null) => void
+  setGenDetailTarget: (n: number) => void
   dragChapter: number | null
   setDragChapter: (n: number | null) => void
   selectedChapter: number
   addVolume: () => void
   deleteVolume: (n: number) => void
   moveChapterToVolume: (ch: number, vol: number) => void
-  genSingleChapterPlan: (n: number) => Promise<void>
+  genSingleChapterPlan: (n: number, config?: { primaryStyleId: number | null; auxStyleIds: number[]; primaryPersonalityId: number | null; auxPersonalityIds: number[] }) => Promise<void>
   setFullView: (v: { title: string; content: string }) => void
   chDone: (n: number) => boolean
   onUpdateVolume: (volNum: number, field: string, value: string) => void
@@ -28,7 +29,7 @@ interface Props {
 
 export default function VolumePanel({
   volumes, chapterPlans, expandedVolume, setExpandedVolume,
-  generating, outlineContent, outlineVersion, showGenPanel, setShowGenPanel,
+  generating, outlineContent, outlineVersion, showGenPanel, setShowGenPanel, setGenDetailTarget,
   dragChapter, setDragChapter, selectedChapter,
   addVolume, deleteVolume, moveChapterToVolume,
   genSingleChapterPlan, setFullView, chDone,
@@ -63,8 +64,8 @@ export default function VolumePanel({
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => { if (dragChapter) { moveChapterToVolume(dragChapter, vol.volume_number); setDragChapter(null) } }}
                 className={`border border-border rounded-card overflow-hidden transition-colors ${dragChapter ? 'border-primary/50 bg-primary-light/10' : ''}`}>
-                <button onClick={() => setExpandedVolume(isExpanded ? null : vol.volume_number)}
-                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-secondary transition-colors text-left">
+                <div onClick={() => setExpandedVolume(isExpanded ? null : vol.volume_number)}
+                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-secondary transition-colors text-left cursor-pointer">
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-medium text-text-main truncate">{vol.title}</div>
                     <div className="text-xs text-text-placeholder">第{vol.chapter_range[0]}-{vol.chapter_range[1]}章 · {vol.theme}{vol.version ? ` · v${vol.version}` : ''}</div>
@@ -77,7 +78,7 @@ export default function VolumePanel({
                       className="text-xs text-text-placeholder hover:text-danger" title="删除此卷">🗑</button>
                     <span className="text-xs text-text-placeholder">{isExpanded ? '▲' : '▼'}</span>
                   </div>
-                </button>
+                </div>
                 {isExpanded && (
                   <div className="border-t border-border px-3 py-1.5 space-y-1">
                     {(vol.detailed_summary || vol.summary) && (
@@ -134,15 +135,11 @@ export default function VolumePanel({
                           `**剧情详述**：${vol.detailed_summary || vol.summary}`, vol.pacing_design ? `**节奏设计**：${vol.pacing_design}` : '',
                           vol.emotional_cadence ? `**情绪节奏**：${vol.emotional_cadence}` : '', vol.character_arcs ? `**角色弧线**：${vol.character_arcs}` : '',
                           vol.emotional_curve ? `**情感曲线**：${vol.emotional_curve}` : '', `**关键事件**：${vol.key_events.join('、')}`, '',
-                          vol.character_milestones?.length ? `**人物里程碑**：\n${vol.character_milestones.map(cm => `- ${cm.character}: ${cm.start_state} → ${cm.end_state} (${cm.key_event})`).join('\n')}` : '',
-                          vol.conflict_nodes?.length ? `**关键冲突节点**：\n${vol.conflict_nodes.map(cn => `- [${cn.chapter_segment}] ${cn.description} (${cn.escalation_type})`).join('\n')}` : '',
+                          vol.character_milestones?.length ? `**人物里程碑**：\n${vol.character_milestones.map((cm: any) => `- ${cm.character}: ${cm.start_state} → ${cm.end_state} (${cm.key_event})`).join('\n')}` : '',
+                          vol.conflict_nodes?.length ? `**关键冲突节点**：\n${vol.conflict_nodes.map((cn: any) => `- [${cn.chapter_segment}] ${cn.description} (${cn.escalation_type})`).join('\n')}` : '',
                           vol.foreshadowing_plant?.length ? `**🪝 本卷新埋**：${vol.foreshadowing_plant.join('、')}` : '',
                           vol.foreshadowing_payoff?.length ? `**✅ 本卷回收**：${vol.foreshadowing_payoff.join('、')}` : '',
                           vol.foreshadowing_advance ? `**🔗 伏笔推进**：${vol.foreshadowing_advance}` : '',
-                          vol.foreshadowing_planted?.length ? `**🪝 新伏笔**：${vol.foreshadowing_planted.join('、')}` : '',
-                          vol.foreshadowing_recovered?.length ? `**✅ 回收伏笔**：${vol.foreshadowing_recovered.join('、')}` : '',
-                          '', '## 本卷章节细纲',
-                          ...volPlans.map(p => `### 第${p.chapter_number}章 ${p.title}\n${p.summary || ''}\n人物：${(p.characters || []).join('、')}\n事件：${(p.key_events || []).join('、')}\n字数：${p.estimated_words}`)
                         ].filter(Boolean).join('\n\n')
                       })} className="flex-none px-1.5 py-0 text-xs border border-border-input text-text-secondary rounded hover:bg-bg-secondary">查看详情</button>
                     </div>
@@ -150,13 +147,22 @@ export default function VolumePanel({
                       {Array.from({ length: vol.chapter_range[1] - vol.chapter_range[0] + 1 }, (_, i) => vol.chapter_range[0] + i).map(cn => {
                         const plan = chapterPlans.find(p => p.chapter_number === cn)
                         const prevPlan = cn > vol.chapter_range[0] ? chapterPlans.find(p => p.chapter_number === cn - 1) : true
-                        if (!plan) return (
-                          <div key={cn} className="flex items-center gap-1.5 text-xs text-text-placeholder px-2 py-0.5">
-                            <span>○</span><span className="flex-1">{cn}. 未生成</span>
-                            <button onClick={() => genSingleChapterPlan(cn)} disabled={generating || !prevPlan}
-                              className="text-primary hover:underline disabled:opacity-30 text-xs">{!prevPlan ? '需上章' : '生成'}</button>
+                        if (!plan) {
+                          const chSum = ((vol as any).chapter_summaries as any[])?.find((s: any) => s.chapter === cn)
+                          return (
+                          <div key={cn} className="text-xs text-text-placeholder px-2 py-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span>○</span><span className="flex-1">{cn}. 未生成</span>
+                              <button onClick={() => { setGenDetailTarget(cn); setShowGenPanel('detail') }} disabled={generating || !prevPlan}
+                                className="text-primary hover:underline disabled:opacity-30 text-xs">{!prevPlan ? '需上章' : '生成'}</button>
+                            </div>
+                            {chSum && (
+                              <p className="text-xxs text-text-placeholder/70 truncate ml-4 mt-0.5">
+                                {chSum.summary.replace(/\n/g, ' · ').slice(0, 80)}…
+                              </p>
+                            )}
                           </div>
-                        );
+                        )}
                         return (
                           <div key={cn}>
                             <div draggable onDragStart={() => setDragChapter(cn)}
@@ -179,7 +185,14 @@ export default function VolumePanel({
                               }}
                               className={`text-xs rounded px-2 py-0.5 cursor-pointer flex items-center gap-1.5 transition-colors ${dragChapter === cn ? 'opacity-50' : ''} ${selectedChapter === cn ? 'bg-primary-light text-primary' : 'text-text-secondary hover:bg-bg-secondary'}`}>
                               <span className={chDone(cn) ? 'text-success' : 'text-text-placeholder'}>{chDone(cn) ? '●' : '○'}</span>
-                              <span className="flex-1 truncate">{cn}. {plan.title}</span>
+                              <span className="flex-1 min-w-0">
+                                <span className="truncate block">{cn}. {plan.title}</span>
+                                {((vol as any).chapter_summaries as any[])?.find((s: any) => s.chapter === cn)?.summary && (
+                                  <span className="text-xxs text-text-placeholder truncate block mt-0.5">
+                                    {((vol as any).chapter_summaries as any[]).find((s: any) => s.chapter === cn)!.summary.replace(/\n/g, ' · ').slice(0, 80)}…
+                                  </span>
+                                )}
+                              </span>
                               <button onClick={(e) => { e.stopPropagation();
                                 const exportPlan: any = {}
                                 for (const k of Object.keys(plan)) {
@@ -196,7 +209,7 @@ export default function VolumePanel({
                                   } catch { showToast('error', 'JSON 格式错误，请检查后重试') }
                                 })
                               }} className="text-xs text-text-placeholder hover:text-primary" title="编辑细纲">编辑</button>
-                              <button onClick={(e) => { e.stopPropagation(); genSingleChapterPlan(cn) }} className="text-text-placeholder hover:text-primary text-xs" title="重新生成">🔄</button>
+                              <button onClick={(e) => { e.stopPropagation(); setGenDetailTarget(cn); setShowGenPanel('detail') }} className="text-text-placeholder hover:text-primary text-xs" title="重新生成">🔄</button>
                               <span className="text-text-placeholder cursor-grab" title="拖拽">⠿</span>
                             </div>
                           </div>

@@ -177,7 +177,7 @@ export default function PersonalityList() {
             )}
             {mode === 'manual' && (
               <p className="text-sm text-text-secondary py-4 text-center">
-                创建一个空白人格项目，之后在详情页手动填写 5 个维度的写作人格字段。
+                创建一个空白人格项目，之后在详情页手动填写 5 核行为替换图谱。
               </p>
             )}
           </div>
@@ -190,7 +190,12 @@ export default function PersonalityList() {
 function PersonalityCard({ project, onClick, onDelete }: {
   project: PersonalityProject; onClick: () => void; onDelete: () => void
 }) {
-  const hasData = !!(project.personality_data?.private_imagery || (project.personality_data as any)?.emotional_quirks)
+  const d = project.personality_data || {} as any
+  // 检测是否有实际提取数据（V2替换器内容或V1维度内容）
+  const hasV2Data = (d.emotion && Object.values(d.emotion).some((v: any) => v?.author_uses?.length > 0))
+    || (d.imagery && Object.values(d.imagery).some((v: any) => v?.author_uses?.length > 0))
+    || (d.dialogue && Object.values(d.dialogue).some((v: any) => v?.author_uses?.length > 0))
+  const hasData = !!(d.private_imagery || d.emotional_quirks || hasV2Data)
 
   return (
     <div onClick={onClick}

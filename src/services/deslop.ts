@@ -30,77 +30,68 @@ export interface ParagraphScore {
 
 // ==================== Gate 检测关键词库 ====================
 
-/** Gate A: AI 高频禁用词/句式（5级毒级） */
+/** Gate A: AI 高频禁用词/句式（4级毒级，精简无冗余） */
 export const DEFAULT_BANNED_PATTERNS: BannedPattern[] = [
-  // ***** 最毒级
-  { pattern: '不是……而是', replacement: '加情绪词改写：竟然是…而不是 / 我就知道是…不是 / 搞了半天是…', category: '句式', level: 5 },
-  // **** 高毒级
-  { pattern: '带着一丝', replacement: '拆短句或换动作', category: '句式', level: 4 },
-  { pattern: '带着一股', replacement: '拆短句或换动作', category: '句式', level: 4 },
-  { pattern: '声音不大，却带着', replacement: '直接写声音特征', category: '句式', level: 4 },
-  { pattern: '他知道', replacement: '用行为展示认知', category: '心理', level: 4 },
-  { pattern: '她明白', replacement: '用行为展示认知', category: '心理', level: 4 },
-  { pattern: '他意识到', replacement: '用行为展示认知', category: '心理', level: 4 },
-  // *** 中毒级
-  { pattern: '仿佛', replacement: '删掉或白描', category: '比喻', level: 3 },
-  { pattern: '犹如', replacement: '删掉或白描', category: '比喻', level: 3 },
-  { pattern: '宛若', replacement: '删掉或白描', category: '比喻', level: 3 },
-  { pattern: '眼中闪过一丝', replacement: '他垂下眼', category: '表情', level: 3 },
-  { pattern: '嘴角勾起一抹', replacement: '笑了一下', category: '表情', level: 3 },
-  { pattern: '嘴角微扬', replacement: '笑了', category: '表情', level: 3 },
-  { pattern: '心中涌起', replacement: '用身体反应', category: '心理', level: 3 },
-  { pattern: '心头一震', replacement: '愣了下', category: '心理', level: 3 },
-  { pattern: '心中暗道', replacement: '想', category: '心理', level: 3 },
-  { pattern: '心中一沉', replacement: '（删掉）', category: '心理', level: 3 },
-  { pattern: '心中一动', replacement: '（删掉）', category: '心理', level: 3 },
-  { pattern: '心下了然', replacement: '（删掉）', category: '心理', level: 3 },
-  // ** 低毒级
-  { pattern: '深吸一口气', replacement: '胸口起伏了一下', category: '动作', level: 2 },
-  { pattern: '缓缓开口', replacement: '说', category: '对话', level: 2 },
-  { pattern: '沉声说道', replacement: '说', category: '对话', level: 2 },
-  { pattern: '淡淡地说', replacement: '说', category: '对话', level: 2 },
-  { pattern: '轻声说道', replacement: '说', category: '对话', level: 2 },
-  { pattern: '喃喃自语', replacement: '小声说', category: '对话', level: 2 },
-  { pattern: '不禁', replacement: '直接写动作', category: '副词', level: 2 },
-  { pattern: '不由自主', replacement: '（删掉）', category: '副词', level: 2 },
-  { pattern: '情不自禁', replacement: '（删掉）', category: '副词', level: 2 },
-  { pattern: '不由得', replacement: '（删掉）', category: '副词', level: 2 },
-  { pattern: '映入眼帘', replacement: '看到', category: '描写', level: 2 },
-  { pattern: '只见', replacement: '（删掉，直接写所见）', category: '描写', level: 2 },
-  { pattern: '脸色一变', replacement: '脸白了', category: '表情', level: 2 },
-  { pattern: '眉头微皱', replacement: '皱眉', category: '表情', level: 2 },
-  { pattern: '眉头一皱', replacement: '皱眉', category: '表情', level: 2 },
-  { pattern: '微微一愣', replacement: '愣了下', category: '动作', level: 2 },
-  { pattern: '瞳孔微缩', replacement: '瞪大眼', category: '表情', level: 2 },
-  { pattern: '微微一笑', replacement: '笑了', category: '表情', level: 2 },
-  // * 轻微级
-  { pattern: '旋即', replacement: '接着', category: '连接词', level: 1 },
-  { pattern: '便是', replacement: '就是', category: '连接词', level: 1 },
-  { pattern: '已然', replacement: '已经', category: '副词', level: 1 },
-  { pattern: '并未', replacement: '没', category: '副词', level: 1 },
-  { pattern: '不容置疑', replacement: '（删掉或口语化）', category: '判断', level: 1 },
-  { pattern: '不容置喙', replacement: '（删掉）', category: '判断', level: 1 },
-  { pattern: '不易察觉', replacement: '（删掉）', category: '判断', level: 1 },
-  { pattern: '若有所思', replacement: '用具体动作', category: '心理', level: 1 },
-  { pattern: '大手一挥', replacement: '挥手', category: '动作', level: 1 },
-  // 章末禁忌
-  { pattern: '他不知道的是', replacement: '用具体钩子物件收尾', category: '结尾', level: 4 },
-  { pattern: '更大的风暴即将来临', replacement: '用动作/对话收尾', category: '结尾', level: 4 },
-  { pattern: '他终于明白', replacement: '用动作展示领悟', category: '结尾', level: 4 },
-  { pattern: '这一刻', replacement: '直接写动作', category: '结尾', level: 3 },
-  { pattern: '未来可期', replacement: '删', category: '结尾', level: 2 },
-  { pattern: '注定无人入眠', replacement: '删', category: '结尾', level: 4 },
-  // 解释层
-  { pattern: '意思是', replacement: '（删除整句，信息已被动作传达）', category: '解释', level: 5 },
-  { pattern: '也就是说', replacement: '（删除）', category: '解释', level: 4 },
-  { pattern: '这意味着', replacement: '（删除）', category: '解释', level: 4 },
-  { pattern: '说白了', replacement: '（删除）', category: '解释', level: 4 },
-  { pattern: '换句话说', replacement: '（删除）', category: '解释', level: 4 },
-  // 抽象收束
-  { pattern: '像某种', replacement: '换成具体描写', category: '总结', level: 4 },
-  { pattern: '仿佛一切', replacement: '换成动作或感官', category: '总结', level: 4 },
-  // 破折号
-  { pattern: '——', replacement: '用句号或逗号', category: '标点', level: 3 },
+  // ===== 最高毒级：结构级AI味（禁止整句结构） =====
+  { pattern: '心中涌起', replacement: '改成具体身体反应（手心出汗/胸口发紧/指尖发凉）', category: 'AI心理', level: 5 },
+  { pattern: '心头一震', replacement: '愣了下 / 后背一凉', category: 'AI心理', level: 5 },
+  { pattern: '心中一', replacement: '改成具体身体反应', category: 'AI心理', level: 5 },
+  { pattern: '眼中闪过一丝', replacement: '他垂下眼 / 眯起眼 / 眼睫抖了一下', category: 'AI表情', level: 5 },
+  { pattern: '嘴角勾起一抹', replacement: '笑了一下，没到眼底 / 乐了 / 扯下嘴角', category: 'AI表情', level: 5 },
+  { pattern: '嘴角微扬', replacement: '笑了 / 嘴角动了动', category: 'AI表情', level: 4 },
+  { pattern: '仿佛在诉说着', replacement: '直接写具体场景，删掉比喻', category: 'AI煽情', level: 5 },
+  { pattern: '他似乎', replacement: '直接写他的具体行为或想法', category: 'AI猜测', level: 5 },
+  { pattern: '她似乎在', replacement: '直接写她的具体行为或想法', category: 'AI猜测', level: 5 },
+
+  // ===== 高毒级：AI模板化句式 =====
+  { pattern: '带着一丝', replacement: '拆成短句，或换成具体的感官：手指凉了 / 喉结滚了一下', category: 'AI句式', level: 4 },
+  { pattern: '透着一种', replacement: '换成具体描写', category: 'AI句式', level: 4 },
+  { pattern: '显得格外', replacement: '删掉，直接写事物本身', category: 'AI评判', level: 4 },
+  { pattern: '说不出的', replacement: '换成具体的感官细节', category: 'AI逃避', level: 4 },
+  { pattern: '他不知道的是', replacement: '用具体物件/事件收尾，或删掉整句', category: 'AI预告', level: 4 },
+  { pattern: '他终于明白', replacement: '用动作展示领悟：他放下了手里那封信/没再看第二眼', category: 'AI总结', level: 4 },
+  { pattern: '就这样', replacement: '删掉，直接推进情节', category: 'AI过渡', level: 4 },
+  { pattern: '整个人', replacement: '删掉或换成具体描述', category: 'AI泛化', level: 3 },
+
+  // ===== 中毒级：AI表情/动作/对话套路 =====
+  { pattern: '深吸一口气', replacement: '胸口起伏了一下 / 直接删掉', category: 'AI动作', level: 3 },
+  { pattern: '微微一愣', replacement: '愣了下', category: 'AI动作', level: 3 },
+  { pattern: '瞳孔微缩', replacement: '瞪大眼 / 眼睛眯了起来', category: 'AI表情', level: 3 },
+  { pattern: '脸色一变', replacement: '脸白了 / 脸涨红了 / 没吭声', category: 'AI表情', level: 3 },
+  { pattern: '眉头一皱', replacement: '皱眉', category: 'AI表情', level: 3 },
+  { pattern: '微微一笑', replacement: '笑了 / 笑了一下', category: 'AI表情', level: 3 },
+  { pattern: '缓缓开口', replacement: '说 / 用动作引出对话', category: 'AI对话', level: 3 },
+  { pattern: '沉声说道', replacement: '说', category: 'AI对话', level: 3 },
+  { pattern: '淡淡地说', replacement: '说', category: 'AI对话', level: 3 },
+  { pattern: '轻声说道', replacement: '说', category: 'AI对话', level: 3 },
+  { pattern: '若有所思', replacement: '用具体动作取代（手指敲桌面/盯着窗外看了几秒）', category: 'AI心理', level: 3 },
+  { pattern: '像是', replacement: '删掉或直接比喻', category: 'AI比喻', level: 3 },
+  { pattern: '像某种', replacement: '换成具体描写', category: 'AI比喻', level: 3 },
+
+  // ===== 低毒级：AI副词/连接词/书面语 =====
+  { pattern: '不禁', replacement: '直接写动作', category: 'AI副词', level: 2 },
+  { pattern: '不由得', replacement: '删掉', category: 'AI副词', level: 2 },
+  { pattern: '不由自主', replacement: '删掉', category: 'AI副词', level: 2 },
+  { pattern: '情不自禁', replacement: '删掉', category: 'AI副词', level: 2 },
+  { pattern: '映入眼帘', replacement: '看到 / 出现', category: 'AI描写', level: 2 },
+  { pattern: '旋即', replacement: '接着 / 立刻', category: 'AI连接词', level: 2 },
+  { pattern: '已然', replacement: '已经', category: 'AI副词', level: 2 },
+  { pattern: '便是', replacement: '就是', category: 'AI连接词', level: 2 },
+  { pattern: '一目了然', replacement: '一眼就看出来了 / 删掉', category: 'AI成语', level: 2 },
+  { pattern: '不容置疑', replacement: '删掉或口语化', category: 'AI判断', level: 2 },
+
+  // ===== 章末/解释/抽象收束 =====
+  { pattern: '意思是', replacement: '删掉整句（动作已传达了信息）', category: 'AI解释', level: 5 },
+  { pattern: '也就是说', replacement: '删掉', category: 'AI解释', level: 4 },
+  { pattern: '换句话说', replacement: '删掉', category: 'AI解释', level: 4 },
+  { pattern: '这意味着', replacement: '删掉', category: 'AI解释', level: 4 },
+  { pattern: '说白了', replacement: '删掉', category: 'AI解释', level: 4 },
+  { pattern: '更大的风暴即将来临', replacement: '换成具体事件/动作/对话', category: 'AI结尾', level: 4 },
+  { pattern: '注定无人入眠', replacement: '删掉', category: 'AI结尾', level: 4 },
+  { pattern: '仿佛一切', replacement: '换成具体动作或感官', category: 'AI收束', level: 3 },
+
+  // ===== 标点 =====
+  { pattern: '——', replacement: '用句号或逗号连接', category: '标点', level: 3 },
 ]
 
 /** 向后兼容：BANNED_PATTERNS 别名 */

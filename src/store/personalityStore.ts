@@ -38,9 +38,19 @@ export const usePersonalityStore = create<PersonalityState>((set, get) => ({
   create: async (name, sourceText) => {
     try {
       if (window.electronAPI) {
+        // V2 空骨架：5核替换器空模板（新建即显示V2格式UI）
+        const v2Empty = JSON.stringify({
+          emotion: {},
+          imagery: {},
+          dialogue: {},
+          rhythm: {},
+          observation: {},
+          style_profile: { perspective: '', global_pattern: '' },
+          raw_analysis: '',
+        })
         const result = await window.electronAPI.db.run(
-          'INSERT INTO personality_projects (name, source_text) VALUES (?, ?)',
-          [name, sourceText]
+          'INSERT INTO personality_projects (name, source_text, personality_data) VALUES (?, ?, ?)',
+          [name, sourceText, v2Empty]
         )
         await get().load()
         return result.lastInsertRowid

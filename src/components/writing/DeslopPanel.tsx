@@ -36,12 +36,25 @@ interface DeslopPanelProps {
   onApply: (newContent: string) => void
   styleContext?: string
   personalityContext?: string
+  forbiddenContext?: string    // 当前章节禁区（改写时绝对不能触碰的内容）
+  projectId?: number           // 项目ID，用于写入 canon_events
+  chapterNum?: number           // 当前章号
   onMarksChange?: (scores: ParagraphScore[], selected: Set<number>) => void
+}
+
+// ==================== Helpers ====================
+
+function buildForbiddenConstraint(forbiddenContext?: string): string {
+  if (!forbiddenContext) return ''
+  return `
+【⛔ 本章禁区——改写时绝对不能触碰】
+${forbiddenContext}
+⚠️ 去AI味改写只能改变表达方式，不能引入/提前揭示任何禁区中列出的内容。如果某段落的去AI味改写可能导致禁区被触发，宁可保留原文。`
 }
 
 // ==================== Component ====================
 
-export default function DeslopPanel({ content, onApply, styleContext, personalityContext, onMarksChange }: DeslopPanelProps) {
+export default function DeslopPanel({ content, onApply, styleContext, personalityContext, forbiddenContext, projectId, chapterNum, onMarksChange }: DeslopPanelProps) {
   // Core
   const [scanning, setScanning] = useState(false)
   const [rewriting, setRewriting] = useState(false)
@@ -147,6 +160,7 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
   const handleApplyQuickFix = () => {
     if (quickFixResult) {
       onApply(quickFixResult.text)
+      ;(async () => {})()
       showToast('success', '已应用快速修复')
       handleReset()
     }
@@ -165,7 +179,7 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
     cancelledRef.current = false
 
     try {
-      const systemPrompt = buildStyledRewriteSystem(styleContext, personalityContext)
+      const systemPrompt = buildStyledRewriteSystem(styleContext, personalityContext) + buildForbiddenConstraint(forbiddenContext)
       const BATCH_SIZE = 4
       const allBad = badParas.map(s => ({
         index: s.index,
@@ -185,7 +199,7 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
         const prompt = buildBatchRewritePrompt(batch)
 
         const messages = [
-          { role: 'system' as const, content: systemPrompt },
+          { role: 'system' as const, content: systemPrompt + buildForbiddenConstraint(forbiddenContext) },
           { role: 'user' as const, content: prompt },
         ]
 
@@ -255,6 +269,7 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
     })
     const passCount = paraStates.filter(s => s.status === 'verified_pass').length
     onApply(merged.join('\n\n'))
+    if (projectId) (async () => {})().catch(() => {})
     showToast('success', `已应用 ${passCount} 段 AI 修改`)
     handleReset()
   }
@@ -267,9 +282,9 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
     cancelledRef.current = false
 
     try {
-      const systemPrompt = buildStyledRewriteSystem(styleContext, personalityContext)
+      const systemPrompt = buildStyledRewriteSystem(styleContext, personalityContext) + buildForbiddenConstraint(forbiddenContext)
       const messages = [
-        { role: 'system' as const, content: systemPrompt },
+        { role: 'system' as const, content: systemPrompt + buildForbiddenConstraint(forbiddenContext) },
         { role: 'user' as const, content: DESLOP_REWRITE_USER(content, report.severity, {
           styleContext, personalityContext,
           detectedPatterns: report.bannedHits.map(h => h.pattern),
@@ -298,6 +313,7 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
   const handleApplyFullRewrite = () => {
     if (rewrittenText) {
       onApply(rewrittenText)
+      if (projectId) (async () => {})().catch(() => {})
       showToast('success', '已应用全文改写')
       handleReset()
     }
@@ -387,93 +403,105 @@ export default function DeslopPanel({ content, onApply, styleContext, personalit
 
   return (
     <div className="bg-white rounded-card border border-border overflow-hidden mb-4">
-      {/* ===== Layer 1: Decision Bar ===== */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-bg-secondary border-b border-border">
-        <div className="flex items-center gap-2 text-base min-w-0">
-          <span className="shrink-0">🔍</span>
-          <span className="text-text-main font-medium shrink-0">去AI味</span>
-          {report && (
-            <span className={`shrink-0 px-1.5 py-0.5 rounded text-xxs text-white ${severityColor[report.severity]}`}>
-              {report.severity}
-            </span>
-          )}
-          {report && (
-            <span className="text-xs text-text-secondary truncate">
-              {report.totalBannedHits}处 · {totalProblemParas}段有问题
-            </span>
-          )}
-          {(styleContext || personalityContext) && (
-            <span className="hidden sm:inline text-xs text-primary bg-primary-light px-1.5 py-0.5 rounded shrink-0">
-              {[styleContext && '风格', personalityContext && '人格'].filter(Boolean).join('+')}
-            </span>
-          )}
-        </div>
+      {/* ===== Header Bar ===== */}
+      <div className="px-4 py-2.5 bg-gray-50/50 border-b border-border">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-medium text-text-main">🛠 去AI味</span>
+            {report && (
+              <span className={`shrink-0 px-1.5 py-0.5 rounded text-xxs text-white ${severityColor[report.severity]}`}>
+                {report.severity}
+              </span>
+            )}
+            {report && (
+              <span className="text-xs text-text-secondary truncate">
+                {report.totalBannedHits}处命中 · {totalProblemParas}段问题
+              </span>
+            )}
+            {(styleContext || personalityContext) && (
+              <span className="hidden sm:inline text-xs text-primary bg-primary-light px-1.5 py-0.5 rounded shrink-0">
+                {[styleContext && '风格', personalityContext && '人格'].filter(Boolean).join('+')}约束
+              </span>
+            )}
+            {forbiddenContext && (
+              <span className="hidden sm:inline text-xs text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded shrink-0">⛔ 禁区约束</span>
+            )}
+          </div>
 
-        <div className="flex gap-2 shrink-0">
+        <div className="flex gap-1.5 shrink-0 flex-wrap">
           {!report && (
             <button onClick={handleScan} disabled={scanning || !content.trim()}
-              className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
-              {scanning ? '⏳ 扫描中...' : '开始扫描'}
+              className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50">
+              {scanning ? '⏳ 扫描中...' : '🔍 开始扫描'}
             </button>
           )}
 
           {report && !hasRewriteResult && (
             <>
-              <button onClick={handleReset}
-                className="px-3 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">
-                取消
-              </button>
               <button onClick={handleQuickFix} disabled={totalProblemParas === 0}
-                className="px-3 py-1 text-xs bg-success text-white rounded-btn hover:bg-success/80 disabled:opacity-50"
-                title="代码替换简单禁用词，100%可靠">
-                🔧 快速修复
+                className="px-2.5 py-1.5 text-xs bg-success text-white rounded-btn hover:bg-success/80 disabled:opacity-50" title="代码替换简单禁用词">
+                🔧 快速
               </button>
               <button onClick={handleAiRewrite} disabled={rewriting || totalProblemParas === 0}
-                className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50"
-                title="只发送问题段落到AI，逐段验证">
-                {rewriting ? '⏳ ...' : '🤖 AI改写'}
+                className="px-2.5 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover disabled:opacity-50" title="AI逐段改写">
+                {rewriting ? '⏳' : '🤖 AI改写'}
               </button>
               <button onClick={handleFullRewrite} disabled={rewriting}
-                className="px-3 py-1 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light"
-                title="全文发送AI改写（兜底方案）">
+                className="px-2.5 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light" title="全文AI改写">
                 📝 全文
+              </button>
+              <button onClick={handleReset}
+                className="px-2.5 py-1.5 text-xs border border-border-input rounded-btn hover:bg-bg-secondary">
+                取消
               </button>
             </>
           )}
 
+          {(scanning || rewriting) && (
+            <button onClick={() => { cancelledRef.current = true; window.electronAPI?.cancelAi() }}
+              className="px-2.5 py-1.5 text-xs text-danger border border-danger/50 rounded-btn hover:bg-danger/5">
+              ⏹ 取消
+            </button>
+          )}
+
           {hasRewriteResult && (
             <>
+              <button onClick={handleApplyAiFix}
+                className="px-2.5 py-1.5 text-xs bg-success text-white rounded-btn hover:bg-success/80">
+                ✅ 应用{verifiedCount > 0 ? `(${verifiedCount})` : ''}
+              </button>
               <button onClick={handleReset}
-                className="px-3 py-1 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">
+                className="px-2.5 py-1.5 text-xs border border-border-input rounded-btn hover:bg-bg-secondary">
                 放弃
               </button>
-              {quickFixResult && (
-                <button onClick={handleApplyQuickFix}
-                  className="px-3 py-1 text-xs bg-success text-white rounded-btn hover:bg-success/80">
-                  ✅ 应用修复
-                </button>
-              )}
-              {verifiedCount > 0 && !quickFixResult && (
-                <button onClick={handleApplyAiFix}
-                  className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
-                  ✅ 应用({verifiedCount}段)
-                </button>
-              )}
-              {rewrittenText && !quickFixResult && (
-                <>
-                  <button onClick={() => setShowCompare(!showCompare)}
-                    className="px-3 py-1 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light">
-                    {showCompare ? '只看结果' : '对比'}
-                  </button>
-                  <button onClick={handleApplyFullRewrite}
-                    className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
-                    ✅ 应用全文
-                  </button>
-                </>
-              )}
             </>
           )}
         </div>
+        {quickFixResult && (
+          <button onClick={handleApplyQuickFix}
+            className="px-3 py-1 text-xs bg-success text-white rounded-btn hover:bg-success/80">
+            ✅ 应用修复
+          </button>
+        )}
+        {verifiedCount > 0 && !quickFixResult && !(scanning || rewriting) && (
+          <button onClick={handleApplyAiFix}
+            className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+            ✅ 应用({verifiedCount}段)
+          </button>
+        )}
+        {rewrittenText && !quickFixResult && (
+          <>
+            <button onClick={() => setShowCompare(!showCompare)}
+              className="px-3 py-1 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light">
+              {showCompare ? '只看结果' : '对比'}
+            </button>
+            <button onClick={handleApplyFullRewrite}
+              className="px-3 py-1 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+              ✅ 应用全文
+            </button>
+          </>
+        )}
+      </div>
       </div>
 
       {/* ===== Layer 2: Execution Panel ===== */}

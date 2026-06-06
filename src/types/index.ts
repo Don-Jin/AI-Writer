@@ -124,6 +124,9 @@ export interface Volume {
   cool_density?: string            // 爽点密度描述
   golden_five?: string             // 黄金五章对照
   timeline_context?: { current_day: number; days_covered: number }
+  global_info_quota?: string       // 世界观公开度配额（如"在[XX事件]暗示→在[YY事件]确认"）
+  emotion_stage?: { limit: string } // 感情线阶段限制（如"直到[具体事件]发生前，感情不超过[阶段]"）
+  volume_forbidden?: string[]      // 本卷禁止出现的剧情内容
   outline_version?: number         // 基于哪个大纲版本生成
   version?: number                 // 卷自身编辑版本
 }
@@ -310,16 +313,24 @@ export interface SettingLibrary {
 
 // ========== 人格库 ==========
 export interface PersonalityProfile {
-  private_imagery: string        // 私人意象：反复出现的独一细节
-  emotional_quirks: string       // 情绪怪癖：角色在极端情绪下的反常反应
-  rhythm_fingerprint: string     // 节奏指纹：何时加速/走神/停顿
-  nonsense_style: string         // 废话风格：叙述者插嘴/角色跑题/重复
-  private_rhetoric: string       // 私人修辞：从生活长出的比喻
-  dialogue_fingerprint: string   // 对话指纹：情绪体现、说多少藏多少、角色声音差异
-  scenery_fingerprint: string    // 风景指纹：频率、切入方式、如何以景写情
-  narrative_distance: string     // 叙事距离：叙述者离角色多近、是否点评、视角切换
-  info_release: string           // 信息释放：载体、分批/一次性、伏笔模式
-  raw_analysis: string           // 综合分析
+  // V1 字段（旧格式回退）
+  private_imagery?: string
+  emotional_quirks?: string
+  rhythm_fingerprint?: string
+  nonsense_style?: string
+  private_rhetoric?: string
+  dialogue_fingerprint?: string
+  scenery_fingerprint?: string
+  narrative_distance?: string
+  info_release?: string
+  raw_analysis?: string
+  // V2 字段：5核行为替换图谱
+  emotion?: Record<string, { ai_defaults: string[]; author_uses: string[]; principle: string }>
+  imagery?: Record<string, { ai_defaults: string[]; author_uses: string[]; principle: string }>
+  dialogue?: Record<string, { ai_defaults: string[]; author_uses: string[]; principle: string }>
+  rhythm?: Record<string, { ai_defaults: string[]; author_uses: string[]; principle: string }>
+  observation?: Record<string, { ai_defaults: string[]; author_uses: string[]; principle: string }>
+  style_profile?: { perspective?: string; global_pattern?: string }
 }
 
 export interface PersonalityProject {

@@ -3,40 +3,32 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
 import DeslopPanel from './DeslopPanel'
 import VolumePanel from './VolumePanel'
-import ReviewPanel from './ReviewPanel'
-import { getEffectivePatterns, saveCustomBannedPatterns } from '../../services/deslop'
+import DesignPanel from './DesignPanel'
+import CheckReportPanel from './CheckReportPanel'
+import { getEffectivePatterns, saveCustomBannedPatterns, deterministicReplace, buildStyledRewriteSystem, DESLOP_REWRITE_USER } from '../../services/deslop'
 import type { ParagraphScore } from '../../services/deslop'
-import ForeshadowingPanel from './ForeshadowingPanel'
-import TimelinePanel from './TimelinePanel'
-import CanonFactPanel from './CanonFactPanel'
 
 import {
   PREPARE_SYSTEM, PREPARE_USER,
   OUTLINE_SYSTEM, OUTLINE_USER,
   OUTLINE_NORMALIZE_SYSTEM, OUTLINE_NORMALIZE_USER,
-  CONTINUE_SYSTEM, CONTINUE_USER,
   IDEA_SYSTEM, IDEA_USER,
   GOLDEN_THREE_SYSTEM, GOLDEN_THREE_USER,
   REVERSE_OUTLINE_SYSTEM, REVERSE_OUTLINE_USER,
   VOLUME_OUTLINE_SYSTEM, VOLUME_OUTLINE_USER,
-  DETAIL_OUTLINE_SYSTEM, DETAIL_OUTLINE_USER,
   CHAPTER_SYSTEM, CHAPTER_USER,
-  CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
-  CHAPTER_SUMMARY_SYSTEM, CHAPTER_SUMMARY_USER,
-  EVENT_EXTRACTION_SYSTEM, EVENT_EXTRACTION_USER,
-  NARRATIVE_STATE_REPORT_SYSTEM, NARRATIVE_STATE_REPORT_USER,
-  CANON_EXTRACTION_SYSTEM, CANON_EXTRACTION_USER,
-  buildMinimalContext, buildStateContext,
+  buildExecutionConstraints,
   AUTO_FIX_SYSTEM, AUTO_FIX_USER,
+  NARRATIVE_STATE_REPORT_SYSTEM, NARRATIVE_STATE_REPORT_USER,
 } from '../../services/generator'
 import {
-  checkChapter, applyStatePatches, calcInfoLoss, buildRewritePrompt,
+  checkChapter, calcInfoLoss, buildRewritePrompt,
   takeSnapshot, diffSnapshot, buildStatePatchFromEvents, getCalibrationStats,
-  computeStateDrift, selectMode, modeTvDelta, modeDecayRate, modeDriftBonus,
   DEFAULT_REWRITE_LIMIT,
   type Violation, type CheckResult, type StatePatch,
   type NormalizedLeakScore, type EventExtractionResult,
 } from '../../services/checker'
+import * as trackerService from '../../services/trackerService'
 import type { NovelProject, Chapter, StyleLibrary, SettingLibrary, PersonalityProject } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
 
@@ -66,6 +58,10 @@ interface Volume {
   cool_density?: string
   golden_five?: string
   timeline_context?: { current_day: number; days_covered: number }
+  chapter_summaries?: { chapter: number; summary: string }[]
+  global_info_quota?: string       // 世界观公开度配额
+  emotion_stage?: { limit: string } // 感情线阶段限制
+  volume_forbidden?: string[]      // 本卷禁止出现的剧情内容
   outline_version?: number
   version?: number
 }
@@ -164,67 +160,72 @@ function buildStyleContext(
   primaryStyleId: number | null, auxStyleIds: number[],
   styleLibraries: StyleLibrary[]
 ) {
+  try {
   const ids = [primaryStyleId, ...auxStyleIds].filter(Boolean) as number[]
   const styles = styleLibraries.filter(l => ids.includes(l.id))
   if (!styles.length) return ''
+
   return styles.map((s) => {
     const p = s.style_profile as any
+    const prefix = `【🎨 风格材料池——${s.id === primaryStyleId ? '主' : '辅'}】${s.name}`
+
+    // V4 格式：22类替换指南
+    if (p?.replacements && typeof p.replacements === 'object' && !Array.isArray(p.replacements)) {
+      const r = p.replacements
+      const lines: string[] = [prefix]
+      const keys = ['心理', '表情', '动作', '对话', '比喻', '结尾', '解释', '评判', '句子', '句式', '副词', '煽情', '描写', '连接词', '猜测', '过渡', '总结', '收束', '泛化', '成语', '预告']
+      let count = 0
+      for (const k of keys) {
+        const dim = r[k]
+        if (!dim || typeof dim !== 'object' || count >= 8) continue
+        count++
+        lines.push(`\n【${k}】`)
+        if (Array.isArray(dim.ai_uses) && dim.ai_uses.length) lines.push(`❌ AI会用：${dim.ai_uses.join('、')}`)
+        if (Array.isArray(dim.human_uses) && dim.human_uses.length) lines.push(`✅ 人类写法：${dim.human_uses.slice(0, 2).map((u: string) => `"${u}"`).join(' / ')}`)
+        if (typeof dim.rule === 'string') lines.push(`📏 规则：${dim.rule}`)
+      }
+      return lines.join('\n')
+    }
+
+    // V3 旧格式回退
     const n = p?.narrative; const rh = p?.sentence_rhythm
     const pg = p?.paragraph; const l = p?.language; const a = p?.atmosphere
-    const prefix = `【🎨 风格约束——${s.id === primaryStyleId ? '主' : '辅'}】${s.name}`
     const hard: string[] = []; const soft: string[] = []; const style: string[] = []
 
-    // ── 🔴 硬约束 ≤7条 ──
     if (n?.perspective) hard.push(`- 使用「${n.perspective}」。禁止切换视角。`)
     if (n?.pov_rules) hard.push(`- ${n.pov_rules}`)
     if (pg?.forbidden) hard.push(`- 禁止：${pg.forbidden}`)
     if (l?.forbidden_words) {
       const words = l.forbidden_words.split(/[,，、\s]+/).filter((w: string) => w.length > 1)
-      if (words.length > 0) hard.push(`- 禁用词汇（出现即违规）：${words.slice(0, 20).join('、')}`)
+      if (words.length > 0) hard.push(`- 禁用词汇：${words.slice(0, 20).join('、')}`)
     }
-
-    // ── 🟡 软约束 ≤12条 ──
     if (rh && typeof rh === 'object') {
       if (rh.short_max) soft.push(`- 短句≤${rh.short_max}字`)
       if (rh.long_min) soft.push(`- 长句≥${rh.long_min}字`)
       if (rh.density) soft.push(`- 句式密度：${rh.density}`)
       if (rh.exception) soft.push(`- 例外：${rh.exception}`)
-    } else if (typeof rh === 'string' && rh.length > 2) {
-      soft.push(`- 句式：${rh}`)
-    } else {
-      const ws = p?.writing_style
-      if (ws?.sentence_characteristics) soft.push(`- 句式：${ws.sentence_characteristics}`)
-    }
+    } else if (typeof rh === 'string' && rh.length > 2) soft.push(`- 句式：${rh}`)
+    else { const ws = p?.writing_style; if (ws?.sentence_characteristics) soft.push(`- 句式：${ws.sentence_characteristics}`) }
     if (l?.vocab_level) soft.push(`- 词汇层级：${l.vocab_level}`)
     if (l?.dialogue_vs_narrative) soft.push(`- 叙事vs对话：${l.dialogue_vs_narrative}`)
     if (a?.emotion_scale) soft.push(`- 情绪跨度：${a.emotion_scale}`)
-    if (a?.level_triggers) soft.push(`- 升档触发：${a.level_triggers}`)
-    if (a?.must_downgrade) soft.push(`- 必须降档场景：${a.must_downgrade}`)
     if (pg?.habit) soft.push(`- 段落习惯：${pg.habit}`)
-    if (pg?.by_scene_type) soft.push(`- 场景段落：${pg.by_scene_type}`)
-
-    // ── 🔵 风格漂移 ≤15条 ──
     if (n?.narrator_intrusion) style.push(`- 叙事者行为：${n.narrator_intrusion}`)
-    if (a?.tone) style.push(`- 氛围：${a.tone}`)
-    else if (a?.primary) style.push(`- 氛围：${a.primary}`)
-    // v2/旧格式回退
     if (!hard.length && !soft.length) {
       const ws = p?.writing_style; const lf = p?.language_features
-      if (ws?.narrative_perspective) hard.push(`- 使用「${ws.narrative_perspective}」`)
+      if (ws?.narrative_perspective) hard.push(`- ${ws.narrative_perspective}`)
       if (ws?.pace) soft.push(`- 节奏：${ws.pace}`)
       if (lf?.vocabulary_preference) soft.push(`- 词汇：${lf.vocabulary_preference}`)
-      if (ws?.paragraph_ratio) soft.push(`- 段落：${ws.paragraph_ratio}`)
     }
-
-    const sections: string[] = [prefix]
-    if (hard.length) sections.push(`🔴 必须遵守（${Math.min(hard.length, 7)}条）：\n${hard.slice(0, 7).join('\n')}`)
-    if (soft.length) sections.push(`🟡 优先遵守（${Math.min(soft.length, 12)}条）：\n${soft.slice(0, 12).join('\n')}`)
-    if (style.length) sections.push(`🔵 风格漂移（${Math.min(style.length, 15)}条）：\n${style.slice(0, 15).join('\n')}`)
-    return sections.join('\n\n')
+    const sects = [prefix]
+    if (hard.length) sects.push(`🔴 必须遵守：\n${hard.slice(0, 7).join('\n')}`)
+    if (soft.length) sects.push(`🟡 优先遵守：\n${soft.slice(0, 10).join('\n')}`)
+    return sects.join('\n\n')
   }).join('\n')
+  } catch { return '' }
 }
 
-/** 构建人格库上下文（正文用） — 约束式输出，分三层 */
+/** 构建人格库上下文（正文用）— V2：5核行为替换图谱，❌→✅ 可执行格式 */
 function buildPersonalityContext(
   primaryId: number | null, auxIds: number[],
   personalityProjects: PersonalityProject[]
@@ -234,10 +235,71 @@ function buildPersonalityContext(
   if (!projects.length) return ''
   return projects.map(p => {
     const d = p.personality_data || {} as any
-    const prefix = `【🧠 人格约束——${p.id === primaryId ? '主' : '辅'}】${p.name}`
+    const prefix = `【🧠 人格材料池——${p.id === primaryId ? '主' : '辅'}】${p.name}`
+
+    // V2 新格式：5核替换器
+    if (d?.emotion || d?.imagery || d?.dialogue) {
+      const lines: string[] = [prefix]
+      // 1. 情绪替换器
+      if (d.emotion) {
+        const emoLines: string[] = []
+        for (const [label, dim] of Object.entries(d.emotion) as any) {
+          if (!dim?.author_uses?.length) continue
+          emoLines.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+          if (dim.principle) emoLines.push(`    📏 ${dim.principle}`)
+        }
+        if (emoLines.length) lines.push('【情绪替换器】\n' + emoLines.join('\n'))
+      }
+      // 2. 意象替换器
+      if (d.imagery) {
+        const imgLines: string[] = []
+        for (const [label, dim] of Object.entries(d.imagery) as any) {
+          if (!dim?.author_uses?.length) continue
+          imgLines.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+          if (dim.principle) imgLines.push(`    📏 ${dim.principle}`)
+        }
+        if (imgLines.length) lines.push('【意象替换器】\n' + imgLines.join('\n'))
+      }
+      // 3. 对话替换器
+      if (d.dialogue) {
+        const diaLines: string[] = []
+        for (const [label, dim] of Object.entries(d.dialogue) as any) {
+          if (!dim?.author_uses?.length) continue
+          diaLines.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+          if (dim.principle) diaLines.push(`    📏 ${dim.principle}`)
+        }
+        if (diaLines.length) lines.push('【对话替换器】\n' + diaLines.join('\n'))
+      }
+      // 4. 节奏替换器
+      if (d.rhythm) {
+        const rhyLines: string[] = []
+        for (const [label, dim] of Object.entries(d.rhythm) as any) {
+          if (!dim?.author_uses?.length) continue
+          rhyLines.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+          if (dim.principle) rhyLines.push(`    📏 ${dim.principle}`)
+        }
+        if (rhyLines.length) lines.push('【节奏替换器】\n' + rhyLines.join('\n'))
+      }
+      // 5. 观察替换器
+      if (d.observation) {
+        const obsLines: string[] = []
+        for (const [label, dim] of Object.entries(d.observation) as any) {
+          if (!dim?.author_uses?.length) continue
+          obsLines.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+          if (dim.principle) obsLines.push(`    📏 ${dim.principle}`)
+        }
+        if (obsLines.length) lines.push('【观察替换器】\n' + obsLines.join('\n'))
+      }
+      // 全局模式
+      if (d.style_profile?.global_pattern) {
+        lines.push(`【全局模式】${d.style_profile.global_pattern}`)
+      }
+      return lines.join('\n')
+    }
+
+    // V1 旧格式回退
     const soft: string[] = []; const style: string[] = []
 
-    // ── 🟡 软约束（意象+修辞+对话+风景是硬材料池） ──
     const imgs = extractItems(d.private_imagery, 8)
     if (imgs.length) soft.push(`- 私人意象（只能用以下，禁止训练数据套路意象）：\n${imgs.map(i => `  · ${i}`).join('\n')}`)
     const quirks = extractItems(d.emotional_quirks, 5)
@@ -245,25 +307,43 @@ function buildPersonalityContext(
     const rhetorics = extractItems(d.private_rhetoric, 5)
     if (rhetorics.length) soft.push(`- 私人修辞（比喻必须从以下生长）：\n${rhetorics.map(r => `  · ${r}`).join('\n')}`)
     const dialogue = extractItems(d.dialogue_fingerprint, 6)
-    if (dialogue.length) soft.push(`- 对话指纹（角色说话方式只能从以下模式中取——情绪表达方式、说多少藏多少、角色声音差异）：\n${dialogue.map(dl => `  · ${dl}`).join('\n')}`)
+    if (dialogue.length) soft.push(`- 对话指纹（角色说话方式只能从以下模式中取）：\n${dialogue.map(dl => `  · ${dl}`).join('\n')}`)
     const scenery = extractItems(d.scenery_fingerprint, 5)
-    if (scenery.length) soft.push(`- 风景指纹（景物描写的频率、切入方式、如何通过景写情）：\n${scenery.map(sc => `  · ${sc}`).join('\n')}`)
+    if (scenery.length) soft.push(`- 风景指纹（景物描写方式）：\n${scenery.map(sc => `  · ${sc}`).join('\n')}`)
 
-    // ── 🔵 风格漂移 ──
     const rhythm = extractItems(d.rhythm_fingerprint, 5)
     if (rhythm.length) style.push(`- 节奏指纹：\n${rhythm.map(r => `  · ${r}`).join('\n')}`)
     const nonsense = extractItems(d.nonsense_style, 4)
-    if (nonsense.length) style.push(`- 废话风格（允许的叙事者行为）：\n${nonsense.map(n => `  · ${n}`).join('\n')}`)
+    if (nonsense.length) style.push(`- 废话风格：\n${nonsense.map(n => `  · ${n}`).join('\n')}`)
     const narration = extractItems(d.narrative_distance, 4)
-    if (narration.length) style.push(`- 叙事距离（叙述者离角色多近、是否点评、视角切换）：\n${narration.map(nr => `  · ${nr}`).join('\n')}`)
+    if (narration.length) style.push(`- 叙事距离：\n${narration.map(nr => `  · ${nr}`).join('\n')}`)
     const infoRelease = extractItems(d.info_release, 4)
-    if (infoRelease.length) style.push(`- 信息释放（关键信息通过什么载体、分批还是一次性、伏笔模式）：\n${infoRelease.map(ir => `  · ${ir}`).join('\n')}`)
+    if (infoRelease.length) style.push(`- 信息释放：\n${infoRelease.map(ir => `  · ${ir}`).join('\n')}`)
 
     const sections: string[] = [prefix]
     if (soft.length) sections.push(`🟡 优先遵守（${soft.length}条）：\n${soft.join('\n')}`)
     if (style.length) sections.push(`🔵 风格漂移（${style.length}条）：\n${style.join('\n')}`)
     return sections.join('\n\n')
   }).join('\n')
+}
+
+/** 构建可见的违规标记块（用于插入正文顶部，用户修改后可手动删除） */
+function buildViolationMarkers(violations: Array<{ type: string; detail: string; source: string }>): string {
+  const hard = violations.filter(v => v.source !== 'ai_suggestion')
+  if (hard.length === 0) return ''
+  return hard.map((v, i) =>
+    `\n══════════════════════════════════════\n` +
+    `⚠️ 硬违规 ${i + 1}/${hard.length}：[${v.type}] ${v.detail}\n` +
+    `👆 修改后请删除本标记块\n` +
+    `══════════════════════════════════════`
+  ).join('')
+}
+
+/** 剥离正文中的违规标记块，返回干净的文本 */
+function stripViolationMarkers(text: string): string {
+  return text
+    .replace(/\n?══════════════════════════════════════\n⚠️ 硬违规 \d+\/\d+：\[[\s\S]*?══════════════════════════════════════/g, '')
+    .trim()
 }
 
 /** 卷纲高级字段 — 可折叠展示 */
@@ -287,9 +367,16 @@ export default function Workspace() {
   const [editingContent, setEditingContent] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genTarget, setGenTarget] = useState('')
+  // v3.0: 自动续写（queueEndChapter>0 表示正在运行中）
+  const autoContinueRef = useRef(true)  // true = 允许续写, false = 中断
+  const [queueEndChapter, setQueueEndChapter] = useState<number>(0)  // 自动续写终点章节，0=未运行
+  const [autoContinueDialog, setAutoContinueDialog] = useState(false)
+  const [autoContinueStart, setAutoContinueStart] = useState('')
+  const [autoContinueInput, setAutoContinueInput] = useState('')
+  const [stopOnPlotDeviation, setStopOnPlotDeviation] = useState(false)
   const [budgetInfo, setBudgetInfo] = useState<{ charTokens?: number; totalChars?: number } | null>(null)
   const [saving, setSaving] = useState(false)
-  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'settings' | 'review' | 'foreshadowing' | 'timeline'>('outline')
+  const [rightTab, setRightTab] = useState<'outline' | 'volumes' | 'facts' | 'review'>('outline')
   const [expandedVolume, setExpandedVolume] = useState<number | null>(null)
   // ── 叙事控制台 v2 state ──
   const [lastCheckResult, setLastCheckResult] = useState<CheckResult | null>(null)
@@ -399,11 +486,14 @@ export default function Workspace() {
   const [personalityProjects, setPersonalityProjects] = useState<PersonalityProject[]>([])
 
   const [canonRefresh, setCanonRefresh] = useState(0)
+  const [correctionRefresh, setCorrectionRefresh] = useState(0)
+  const [suggestedForeshadowIds, setSuggestedForeshadowIds] = useState<number[]>([])  // v3.0: 伏笔匹配高亮
 
   // 流式生成
   const [streamingText, setStreamingText] = useState('')
   const cancelledRef = useRef(false)
   const generatingRef = useRef(false)
+  const genChapterRef = useRef<any>(null)  // 始终指向最新的 genChapter，防 setTimeout 闭包陈旧
   const reviewingRef = useRef(false)
   const narrativeReportLoadingRef = useRef(false)
 
@@ -411,14 +501,107 @@ export default function Workspace() {
   useEffect(() => { generatingRef.current = generating }, [generating])
   useEffect(() => { narrativeReportLoadingRef.current = narrativeReportLoading }, [narrativeReportLoading])
   const cancelStreamRef = useRef<(() => void) | null>(null)
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+  const [checkedChapter, setCheckedChapter] = useState<number | null>(null)
+  // 存储 rewrite 所需的上下文（检查是异步的，改错时复用）
+  const rewriteCtxRef = useRef<{
+    allFacts: any[]; timelineHistory: any[]; currentAbsoluteDay: number | null
+    stateDrift: number; narrativeMode: string; charNames: string[]
+    plan: ChapterPlan; chapNum: number
+  } | null>(null)
 
   const handleCancel = () => {
     cancelledRef.current = true
+    autoContinueRef.current = false  // v3.0: 中断自动续写链
     window.electronAPI?.cancelAi()
   }
 
   // 导出
   const [showExport, setShowExport] = useState(false)
+
+  // ========== 一键全流程优化 ==========
+  const [optimizing, setOptimizing] = useState(false)
+  const [optimizeProgress, setOptimizeProgress] = useState<{ step: number; total: number; status: string[] }>({ step: 0, total: 5, status: [] })
+
+  const optimizeChapter = async () => {
+    if (optimizing || !editingContent.trim()) return
+    setOptimizing(true)
+    setOptimizeProgress({ step: 0, total: 5, status: ['禁词扫描', '去AI味改写', 'Checker检查', '自动修复', '更新事实簿'] })
+    cancelledRef.current = false
+
+    try {
+      let text = editingContent
+      const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
+      const facts = await trackerService.getChapterTracker(Number(id), selectedChapter)
+
+      // Step 1: 禁词扫描
+      setOptimizeProgress(p => ({ ...p, step: 1 }))
+      const { text: cleaned, replaced } = deterministicReplace(text)
+      if (replaced > 0) { text = cleaned }
+      if (cancelledRef.current) return
+
+      // Step 2: 去AI味改写
+      setOptimizeProgress(p => ({ ...p, step: 2 }))
+      const deslopSystem = buildStyledRewriteSystem(
+        buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries),
+        buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
+      )
+      const deslopReply = await window.electronAPI!.aiChat([
+        { role: 'system', content: deslopSystem },
+        { role: 'user', content: DESLOP_REWRITE_USER(text, '中度', {
+          styleContext: buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries),
+          personalityContext: buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects),
+        }) },
+      ], '优化-去AI味')
+      if (cancelledRef.current) return
+      text = deslopReply
+      await (async () => {})(); (0 as any); (Number(id), selectedChapter, 'optimize', 1)
+
+      // Step 3: Checker
+      setOptimizeProgress(p => ({ ...p, step: 3 }))
+      // v4.0: 从 story_tracker 读取状态用于检查
+      let allFacts: any[] = []
+      try { allFacts = await window.electronAPI!.db.query("SELECT * FROM story_tracker WHERE project_id = ?", [Number(id)]) } catch {}
+      const checkResult = checkChapter(text, plan || {} as any, allFacts, [], null, Number(id))
+      if (cancelledRef.current) return
+
+      // Step 4: Auto fix violations
+      if (checkResult.violations.length > 0) {
+        setOptimizeProgress(p => ({ ...p, step: 4 }))
+        for (let round = 0; round < 2 && checkResult.violations.length > 0; round++) {
+          const fixPrompt = buildRewritePrompt(text, checkResult.violations)
+          const fixReply = await window.electronAPI!.aiChat([
+            { role: 'system', content: AUTO_FIX_SYSTEM },
+            { role: 'user', content: AUTO_FIX_USER(selectedChapter, text, checkResult.violations.map(v => v.detail), fixPrompt) },
+          ], `优化-修复${round + 1}`)
+          if (cancelledRef.current) return
+          const jm = fixReply.match(/\{[\s\S]*\}/)
+          if (jm) {
+            const { fixes } = JSON.parse(jm[0])
+            for (const { find, replace } of fixes) {
+              if (find !== 'SKIP' && text.includes(find)) text = text.replace(find, replace)
+            }
+          }
+          const recheck = checkChapter(text, plan || {} as any, allFacts, [], null, Number(id))
+          if (recheck.violations.length === 0) break
+        }
+      }
+
+      // Step 5: 更新事实簿
+      setOptimizeProgress(p => ({ ...p, step: 5 }))
+      await (async () => {})(); (0 as any); (Number(id), selectedChapter)
+
+      setEditingContent(text)
+      saveChapter(selectedChapter, plan?.title || `第${selectedChapter}章`, text)
+      setOptimizeProgress(p => ({ ...p, step: 5 }))
+      showToast('success', '优化完成')
+    } catch (e: any) {
+      if (cancelledRef.current) showToast('info', '已取消优化')
+      else showToast('error', '优化失败：' + e.message)
+    } finally {
+      setOptimizing(false)
+    }
+  }
 
   // ========== 加载 ==========
   const loadAll = useCallback(async () => {
@@ -445,8 +628,8 @@ export default function Workspace() {
       const chRows = await window.electronAPI.db.query('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_number', [Number(id)])
       setChapters(chRows)
 
-      const ctx = await window.electronAPI.db.get('SELECT * FROM context_state WHERE project_id = ?', [Number(id)])
-      if (ctx) setPlotSummary(ctx.plot_summary || '')
+      // v4.0: context_state 已删除，不再读取
+      setPlotSummary('')
 
       if (proj.primary_style_id) setPrimaryStyleId(proj.primary_style_id)
       try { setAuxStyleIds(JSON.parse(proj.auxiliary_style_ids || '[]')) } catch {}
@@ -483,10 +666,14 @@ export default function Workspace() {
   }, [])
 
   // 切换章节
-  const switchChapter = async (num: number) => {
+  const switchChapter = async (num: number, preserveCheck = false) => {
     setSelectedChapter(num)
     const ch = chapters.find(c => c.chapter_number === num)
     setEditingContent(ch?.content || '')
+    if (!preserveCheck) {
+      setLastCheckResult(null)
+      setCheckedChapter(null)
+    }
     if (window.electronAPI) {
       await window.electronAPI.settings.set(`workspace_ch_${id}`, String(num))
     }
@@ -548,30 +735,8 @@ export default function Workspace() {
     saveChapterPlans(updated)
   }
 
-  const updateContext = async (chapNum: number, newContent: string) => {
-    try {
-      if (!window.electronAPI) return
-      const ctx = await window.electronAPI.db.get('SELECT * FROM context_state WHERE project_id = ?', [Number(id)])
-      const prevCharState = ctx?.character_state || '{}'
-      const reply = await window.electronAPI.aiChat([
-        { role: 'system', content: CONTEXT_UPDATE_SYSTEM },
-        { role: 'user', content: CONTEXT_UPDATE_USER(prevCharState, plotSummary, newContent) },
-      ], '上下文更新')
-      const jm = reply.match(/\{[\s\S]*\}/)
-      if (jm) {
-        const p = JSON.parse(jm[0])
-        const ncs = JSON.stringify(p.character_state || {})
-        const nps = p.plot_summary || ''
-        ctx
-          ? await window.electronAPI.db.run("UPDATE context_state SET character_state=?, plot_summary=?, last_chapter=?, updated_at=datetime('now','localtime') WHERE project_id=?", [ncs, nps, chapNum, Number(id)])
-          : await window.electronAPI.db.run('INSERT INTO context_state (project_id, character_state, plot_summary, last_chapter) VALUES (?,?,?,?)', [Number(id), ncs, nps, chapNum])
-        setPlotSummary(nps)
-      }
-    } catch {}
-  }
-
-  // ========== 生成逻辑（层级依赖） ==========
-
+  // v4.0: 状态已由 trackerService 管理，不再需要 context_state
+  const updateContext = async (_chapNum: number, _newContent: string) => {}
   const getRefs = async () => {
     // 大纲/卷纲用：拆文库 + 设定库
     const disassemblyContext = buildDisassemblyContext(primaryDissId, auxDissIds, disassemblies)
@@ -579,20 +744,17 @@ export default function Workspace() {
     // 正文用：风格库 + 人格库
     const styleContext = buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)
     const personalityContext = buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
-    // 从 canon_facts 读取硬规则
+    // v4.0: 从 story_tracker 读取主表设定（角色/事件/伏笔/规则）
     let cardContext = ''
     try {
-      const facts = await window.electronAPI!.db.query(
-        "SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1",
-        [Number(id)]
-      )
-      if (facts.length > 0) {
-        const chars = facts.filter((f: any) => f.fact_category === 'character')
-        const settings = facts.filter((f: any) => f.fact_category === 'setting')
-        const rules = facts.filter((f: any) => f.fact_category === 'rule')
-        if (chars.length) cardContext += '【角色】\n' + chars.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
-        if (settings.length) cardContext += '【世界设定】\n' + settings.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
-        if (rules.length) cardContext += '【规则】\n' + rules.map((f: any) => `- ${f.fact_key}: ${f.fact_value}`).join('\n') + '\n'
+      const masterItems = await trackerService.getMasterTracker(Number(id))
+      if (masterItems && masterItems.length > 0) {
+        const chars = masterItems.filter((t: any) => t.tracker_type === 'character')
+        const events = masterItems.filter((t: any) => t.tracker_type === 'event')
+        const rules = masterItems.filter((t: any) => t.tracker_type === 'rules')
+        if (chars.length) cardContext += '【角色】\n' + chars.map((t: any) => `- ${t.tracker_key}: ${t.summary}`).join('\n') + '\n'
+        if (events.length) cardContext += '【事件】\n' + events.map((t: any) => `- ${t.tracker_key}: ${t.summary}`).join('\n') + '\n'
+        if (rules.length) cardContext += '【规则】\n' + rules.map((t: any) => `- ${t.tracker_key}: ${t.summary}`).join('\n') + '\n'
       }
     } catch {}
     return { disassemblyContext, settingLibContext, styleContext, personalityContext, cardContext }
@@ -606,20 +768,26 @@ export default function Workspace() {
 
   /** 生成大纲 — 读：准备+风格+拆文 */
   // 生成面板显示状态
-  const [showGenPanel, setShowGenPanel] = useState<'outline' | 'chapter' | 'volumes' | null>(null)
+  const [showGenPanel, setShowGenPanel] = useState<'outline' | 'chapter' | 'volumes' | 'detail' | null>(null)
   const [genHint, setGenHint] = useState('')
+  const [genDetailTarget, setGenDetailTarget] = useState(1)
 
   const genOutline = async (config?: any, hint?: string) => {
     if (!project || !window.electronAPI) return
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget('大纲')
     try {
-      const { disassemblyContext, settingLibContext } = config
-        ? { disassemblyContext: buildDisassemblyContext(config.primaryDissId, config.auxDissIds, disassemblies),
-            settingLibContext: buildSettingContext(config.primarySettingLibId, config.auxSettingLibIds, settingLibraries) }
-        : await getRefs()
-      const outlinePersonality = buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
-      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, '', disassemblyContext, settingLibContext || undefined, outlinePersonality || undefined)
+      // 大纲用：拆文库 + 设定库。不注入风格库、人格库、事实簿（大纲生成事实，不被事实约束）
+      let disassemblyContext = '', settingLibContext = ''
+      if (config) {
+        disassemblyContext = buildDisassemblyContext(config.primaryDissId, config.auxDissIds, disassemblies)
+        settingLibContext = buildSettingContext(config.primarySettingLibId, config.auxSettingLibIds, settingLibraries)
+      } else {
+        const refs = await getRefs()
+        disassemblyContext = refs.disassemblyContext
+        settingLibContext = refs.settingLibContext
+      }
+      let userPrompt = OUTLINE_USER(project.title, project.description, prepareContent, '', disassemblyContext, settingLibContext || undefined, undefined, undefined)
         + (hint ? `\n\n【作者额外提示】\n${hint}\n\n请根据以上提示调整大纲。` : '')
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
@@ -629,26 +797,13 @@ export default function Workspace() {
       if (cancelledRef.current) return
       await saveOutline(reply)
       showToast('success', '大纲已生成')
-      // 后台自动提取事实簿
+      // v4.0: 提取总表（状态机架构）
       ;(async () => {
         try {
-          const fm = [
-            { role: 'system' as const, content: CANON_EXTRACTION_SYSTEM },
-            { role: 'user' as const, content: CANON_EXTRACTION_USER(reply) },
-          ]
-          const cr = await window.electronAPI!.aiChat(fm, '事实簿提取')
-          const clean = cr.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-          const jm = clean.match(/\[[\s\S]*\]/)
-          if (jm) {
-            const arr = JSON.parse(jm[0])
-            await window.electronAPI!.db.run('DELETE FROM canon_facts WHERE project_id = ? AND source = ?', [Number(id), '大纲'])
-            for (const f of arr) {
-              const rl = f.fact_category === 'character' ? 50 : f.fact_category === 'event' ? 60 : f.fact_category === 'relationship' ? 40 : 30
-              await window.electronAPI!.db.run(
-                `INSERT INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter,revealed_level) VALUES (?,?,?,?,?,?,0,${rl})`,
-                [Number(id), f.fact_category, f.fact_key, f.fact_value, f.is_hard_rule ? 1 : 0, '大纲']
-              )
-            }
+          const count = await trackerService.extractMasterFromOutline(Number(id), reply)
+          if (count > 0) {
+            showToast('success', `总表已提取 ${count} 项`)
+            setCanonRefresh(prev => prev + 1)
           }
         } catch {}
       })()
@@ -663,6 +818,7 @@ export default function Workspace() {
   const confirmGen = () => {
     if (showGenPanel === 'outline') genOutline({ primaryDissId, auxDissIds, primarySettingLibId, auxSettingLibIds }, genHint)
     else if (showGenPanel === 'volumes') genSingleVolume()
+    else if (showGenPanel === 'detail') genSingleChapterPlan(genDetailTarget, { primaryStyleId, auxStyleIds, primaryPersonalityId, auxPersonalityIds })
     else if (showGenPanel === 'chapter') genChapter(selectedChapter, { primaryStyleId, auxStyleIds, primaryPersonalityId, auxPersonalityIds }, genHint)
   }
 
@@ -671,7 +827,16 @@ export default function Workspace() {
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
     if (!window.electronAPI) return
     const total = chapterPlans.length || 40
+    const prevVol = volumes.length > 0 ? volumes[volumes.length - 1] : null
     const nextVolNum = volumes.length + 1
+    // 读取每卷章数配置
+    let chaptersPerVol = 10
+    try {
+      const proj = await window.electronAPI.db.get('SELECT chapters_per_volume FROM novel_projects WHERE id = ?', [Number(id)])
+      if (proj?.chapters_per_volume) chaptersPerVol = proj.chapters_per_volume
+    } catch {}
+    const startChapter = prevVol ? prevVol.chapter_range[1] + 1 : 1
+    const endChapter = startChapter + chaptersPerVol - 1
     setGenerating(true)
     try {
       const { disassemblyContext, settingLibContext, cardContext } = await getRefs()
@@ -682,7 +847,6 @@ export default function Workspace() {
 
       // 前一卷的上下文
       let prevVolContext = '', prevChapterPlansStr = ''
-      const prevVol = volumes.length > 0 ? volumes[volumes.length - 1] : null
       if (prevVol) {
         prevVolContext = `第${prevVol.volume_number}卷《${prevVol.title}》\n主题：${prevVol.theme}\n${prevVol.detailed_summary || prevVol.summary}`
         const prevPlans = chapterPlans.filter(p => p.chapter_number >= prevVol.chapter_range[0] && p.chapter_number <= prevVol.chapter_range[1])
@@ -691,69 +855,43 @@ export default function Workspace() {
         }
       }
 
-      // 查询1: 事实簿硬规则
-      let canonFactsContext = ''
-      try {
-        const hardFacts = await window.electronAPI!.db.query(
-          "SELECT fact_category, fact_key, fact_value FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1",
-          [Number(id)]
-        )
-        if (hardFacts.length > 0) {
-          canonFactsContext = hardFacts.map((f: any) =>
-            `- [${f.fact_category}] ${f.fact_key}: ${f.fact_value}`
-          ).join('\n')
-        }
-      } catch { /* canon_facts 表可能为空 */ }
+      // v4.0: 总表上下文（替代旧 cardContext，从 story_tracker 读取）
+      const canonFactsContext = cardContext || ''
 
-      // 查询2: 伏笔注册表状态
+      // v4.0: 伏笔状态（从 story_tracker master 层读取）
       let foreshadowingStatus = ''
       try {
-        const fsItems = await window.electronAPI!.db.query(
-          `SELECT foreshadow_id, description, status, priority, planted_chapter, target_chapter
-           FROM foreshadowing_registry
-           WHERE project_id = ? AND status IN ('pending','active')
-           ORDER BY priority DESC, target_chapter ASC`,
-          [Number(id)]
-        )
+        const masterTrackers = await trackerService.getMasterTracker(Number(id))
+        const fsItems = masterTrackers.filter((t: any) => t.tracker_type === 'foreshadow' && t.status !== 'resolved')
         if (fsItems.length > 0) {
-          const statusLabels: Record<string, string> = { pending: '待埋', active: '已埋' }
-          const statusLines = fsItems.map((f: any) =>
-            `- [${statusLabels[f.status] || f.status}|${f.priority}] ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter || '?'}章)`
-          )
-          foreshadowingStatus = `共 ${fsItems.length} 个活跃伏笔：\n${statusLines.join('\n')}`
+          foreshadowingStatus = `共 ${fsItems.length} 个活跃伏笔：\n` + fsItems.map((f: any) =>
+            `- ${f.tracker_key}: ${f.summary}`
+          ).join('\n')
         }
-      } catch { /* foreshadowing_registry 表可能为空 */ }
+      } catch {}
 
-      // 查询3: 前卷各章实际执行结果（来自记录官摘要）
+      // v4.0: 前卷执行结果（从 story_tracker chapter 层读取摘要）
       let prevVolOutcomes = ''
       if (prevVol) {
         try {
-          const prevSummaries = await window.electronAPI!.db.query(
-            `SELECT chapter_number, summary, key_events FROM chapter_summaries
-             WHERE project_id = ? AND chapter_number >= ? AND chapter_number <= ?
-             ORDER BY chapter_number`,
-            [Number(id), prevVol.chapter_range[0], prevVol.chapter_range[1]]
-          )
-          if (prevSummaries.length > 0) {
-            prevVolOutcomes = prevSummaries.map((s: any) => {
-              const events = typeof s.key_events === 'string' ? JSON.parse(s.key_events || '[]') : (s.key_events || [])
-              return `第${s.chapter_number}章: ${s.summary || '(无摘要)'} | 关键事件: ${Array.isArray(events) ? events.join('、') : events}`
-            }).join('\n')
+          const prevChapTrackers = await trackerService.getVolumeTracker(Number(id), prevVol.volume_number)
+          if (prevChapTrackers && prevChapTrackers.length > 0) {
+            const lines = prevChapTrackers.map((t: any) =>
+              `第${t.chapter_number}章 [${t.tracker_type}] ${t.tracker_key}: ${t.summary}`
+            )
+            prevVolOutcomes = lines.join('\n')
           }
-        } catch { /* chapter_summaries 可能尚无数据 */ }
+        } catch {}
       }
 
-      // 查询4: 时间线当前位置
+      // v4.0: 时间上下文（简化为从章节总数估算）
       let timelineContext: { current_day: number } | undefined
       try {
-        const dayRow = await window.electronAPI!.db.get(
-          "SELECT MAX(absolute_day) as max_day FROM story_timeline WHERE project_id = ?",
-          [Number(id)]
-        )
-        if (dayRow && dayRow.max_day != null) {
-          timelineContext = { current_day: dayRow.max_day }
+        const totalChs = chapters.filter(c => c.status !== 'draft').length
+        if (totalChs > 0) {
+          timelineContext = { current_day: totalChs }
         }
-      } catch { /* story_timeline 可能为空 */ }
+      } catch {}
 
       cancelledRef.current = false
       const reply = await window.electronAPI.aiChat([
@@ -799,7 +937,7 @@ export default function Workspace() {
         volume_number: nextVolNum,
         title: vol.title || `第${nextVolNum}卷`,
         summary: vol.detailed_summary || vol.summary || '',
-        chapter_range: vol.chapter_range || [prevVol ? prevVol.chapter_range[1] + 1 : 1, prevVol ? prevVol.chapter_range[1] + 10 : 10],
+        chapter_range: vol.chapter_range || [startChapter, endChapter],
         theme: vol.theme || '',
         key_events: [],
         detailed_summary: vol.detailed_summary || vol.summary,
@@ -822,72 +960,67 @@ export default function Workspace() {
         cool_density: vol.cool_density,
         golden_five: vol.golden_five,
         timeline_context: vol.timeline_context,
+        chapter_summaries: vol.chapter_summaries,
+        // v1.8.0 卷纲约束字段（VOLUME_OUTLINE_SYSTEM 定义，补齐 Volume 类型）
+        global_info_quota: vol.global_info_quota,
+        emotion_stage: vol.emotion_stage,
+        volume_forbidden: vol.volume_forbidden,
         outline_version: outlineVersion,
         version: 1,
       }
       const newVols = [...volumes, newVol]
       await saveVolumes(newVols)
 
-      // 后台自动提取卷纲中的新设定到 canon_facts
+      // v4.0: 卷表将在卷结束时由 extractVolumeState 汇总章表状态生成
+      // （旧 canon_facts / foreshadowing_registry 写入已删除）
+
+      // v4.0: 卷纲生成后提取卷表（expected_state）
       ;(async () => {
         try {
-          const volText = JSON.stringify(newVol)
-          const fm = [
-            { role: 'system' as const, content: '从卷纲JSON中提取所有角色名和世界观设定名。只输出JSON数组：[{"fact_key":"名称","fact_category":"character|setting","fact_value":"描述"}]。不要任何其他文字。' },
-            { role: 'user' as const, content: volText },
-          ]
-          const cr = await window.electronAPI!.aiChat(fm, '卷纲事实提取')
-          const jm2 = cr.match(/\[[\s\S]*\]/)
-          if (jm2) {
-            const arr = JSON.parse(jm2[0])
-            for (const f of arr) {
-              if (!f.fact_key) continue
-              const cat = f.fact_category || 'character'
-              const rl = cat === 'character' ? 50 : 30
-              await window.electronAPI!.db.run(
-                `INSERT OR IGNORE INTO canon_facts (project_id,fact_category,fact_key,fact_value,is_hard_rule,source,established_chapter,revealed_level) VALUES (?,?,?,?,?,?,0,${rl})`,
-                [Number(id), cat, f.fact_key, (f.fact_value || '').slice(0, 200), 0, '卷纲生成']
-              )
-            }
+          const count = await trackerService.extractVolumeFromOutline(
+            Number(id), nextVolNum, JSON.stringify(newVol), nextVolNum - 1
+          )
+          if (count > 0) {
+            showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成，卷表提取 ${count} 项`)
+            setCanonRefresh(prev => prev + 1)
+          } else {
+            showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成`)
+            setCanonRefresh(prev => prev + 1)
           }
-        } catch { /* non-blocking */ }
+        } catch {
+          showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成`)
+          setCanonRefresh(prev => prev + 1)
+        }
       })()
-
-      // 将卷纲规划的伏笔写入 foreshadowing_registry
-      if (vol.foreshadowing_plant && vol.foreshadowing_plant.length > 0) {
-        try {
-          for (let fi = 0; fi < vol.foreshadowing_plant.length; fi++) {
-            const fDesc = typeof vol.foreshadowing_plant[fi] === 'string'
-              ? vol.foreshadowing_plant[fi]
-              : vol.foreshadowing_plant[fi]?.desc || vol.foreshadowing_plant[fi]?.description || String(vol.foreshadowing_plant[fi])
-            const fId = `V${nextVolNum}-${fi + 1}`
-            await window.electronAPI!.db.run(
-              `INSERT OR IGNORE INTO foreshadowing_registry (project_id, foreshadow_id, description, status, priority, planted_chapter, target_chapter)
-               VALUES (?, ?, ?, 'pending', 'normal', ?, ?)`,
-              [Number(id), fId, fDesc, vol.chapter_range?.[0] || null, vol.chapter_range?.[1] || null]
-            )
-          }
-        } catch { /* 伏笔入库失败不阻塞 */ }
-      }
-
-      showToast('success', `第${nextVolNum}卷《${newVol.title}》已生成`)
     } catch (e: any) {
       if (cancelledRef.current) showToast('info', '已取消生成')
       else showToast('error', '卷纲生成失败：' + (e.message || '未知'))
     } finally { setGenerating(false) }
   }
 
-  /** 生成某一章的细纲 — 读：大纲+所在卷纲+上一章细纲(如有)+风格+拆文 */
-  const genSingleChapterPlan = async (chapNum: number) => {
+  /** 生成某一章的细纲 — 读：大纲+所在卷纲+上一章细纲(如有)+风格+人格+事实簿 */
+  const genSingleChapterPlan = async (chapNum: number, config?: { primaryStyleId: number | null; auxStyleIds: number[]; primaryPersonalityId: number | null; auxPersonalityIds: number[] }) => {
     if (!outlineContent) { showToast('error', '请先生成大纲'); return }
     if (!window.electronAPI) return
-    const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+    let vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+    // 自动续写刚生成的卷纲 state 可能未刷新，从 DB 回退
+    if (!vol) {
+      try {
+        const dbVols = await window.electronAPI!.db.query('SELECT * FROM volumes WHERE project_id = ?', [Number(id)])
+        vol = dbVols.find((v: any) => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
+      } catch {}
+    }
     if (!vol) { showToast('error', `第${chapNum}章不属于任何卷，请先调整卷纲`); return }
 
     setGenerating(true)
     cancelledRef.current = false
     try {
-      const { styleContext, disassemblyContext } = await getRefs()
+      const styleContext = config
+        ? buildStyleContext(config.primaryStyleId, config.auxStyleIds, styleLibraries)
+        : buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)
+      const personalityContext = config
+        ? buildPersonalityContext(config.primaryPersonalityId, config.auxPersonalityIds, personalityProjects)
+        : buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)
       const isFirstChapterInBook = chapNum === 1
       const isFirstChapterInVol = chapNum === vol.chapter_range[0]
 
@@ -939,13 +1072,60 @@ export default function Workspace() {
             ? `【上一章】第${prevPlan.chapter_number}章 ${prevPlan.title}${prevBeatsContext}${prevContentExcerpt}`
             : `（上一章细纲尚未生成，请基于大纲和卷纲独立设计本章）${prevContentExcerpt}`
 
+      // v3.2: 读取上一章delta状态（等待最多5秒）
+      let prevDeltaContext = ''
+      if (!isFirstChapterInBook && !isFirstChapterInVol) {
+        try {
+          const prevDeltas = await (async () => ([] as any[]))(); (0 as any); (Number(id), chapNum - 1, 5000)
+          if (prevDeltas.length > 0) {
+            const byChar = new Map<string, any[]>()
+            for (const d of prevDeltas) { if (!byChar.has(d.character_name)) byChar.set(d.character_name, []); byChar.get(d.character_name)!.push(d) }
+            prevDeltaContext = '\n【上一章结束时的角色状态——请基于此状态规划本章】\n'
+            for (const [name, deltas] of byChar) {
+              const parts: string[] = []
+              const em = deltas.find((d: any) => d.delta_type === 'emotion')
+              const loc = deltas.find((d: any) => d.delta_type === 'location')
+              if (em) { try { const v = JSON.parse(em.delta_value); parts.push(`情绪=${v.to}`) } catch {} }
+              if (loc) { try { const v = JSON.parse(loc.delta_value); parts.push(`位置=${v.to}`) } catch {} }
+              if (parts.length > 0) prevDeltaContext += `- ${name}：${parts.join('，')}\n`
+            }
+          }
+        } catch {}
+      }
+
+      // 本章概述约束（来自卷纲 chapter_summaries）
+      let summaryConstraint = ''
+      const volSummaries = (vol as any).chapter_summaries as { chapter: number; summary: string }[] | undefined
+      if (volSummaries) {
+        const thisSummary = volSummaries.find(s => s.chapter === chapNum)
+        const nextSummary = volSummaries.find(s => s.chapter === chapNum + 1)
+        if (thisSummary) {
+          summaryConstraint += `\n【本章概述——细纲不得超出此范围】\n${thisSummary.summary}\n⚠️ 情节点必须在此概述描述的剧情内。不要生成概述中没有的情节、不要引入概述之外的人物、不要让故事推进到概述的"合"之后。`
+        }
+        if (nextSummary) {
+          summaryConstraint += `\n【下一章概述——结尾必须衔接至此】\n${nextSummary.summary}\n⚠️ 本章结尾（closing_hook + 最后1-2个情节点）必须能自然衔接到下一章概述的起点。`
+        }
+      }
+
+      // v4.0: 细纲用 tracker 上下文
+      let canonFactsContext = ''
+      try {
+        const trackers = await trackerService.getChapterTracker(Number(id), chapNum)
+        if (trackers && trackers.length > 0) {
+          canonFactsContext = trackers.map((t: any) => `- [${t.tracker_type}] ${t.tracker_key}: ${t.summary}`).join('\n')
+        }
+      } catch {}
+
       const promptParts = [
         outlineContent.slice(0, 3000),
         volContext,
         nodeContext,
+        summaryConstraint,
         prevContext,
+        prevDeltaContext,
         styleContext ? '【风格】\n' + styleContext : '',
-        disassemblyContext ? '【拆文】\n' + disassemblyContext.slice(0, 1000) : '',
+        personalityContext ? '【🧠 人格参考】\n' + personalityContext : '',
+        canonFactsContext ? '【状态追踪】\n' + canonFactsContext : '',
       ].filter(Boolean)
 
       const chapterTypeHint = isFirstChapterInBook
@@ -971,6 +1151,11 @@ export default function Workspace() {
 
 ## 情绪弧线（emotional_arc）
 情绪在章节内的变化轨迹。格式：起始情绪→中间转折→章尾情绪（如"紧张→刺激→敬畏"）
+
+## 人格指纹参考
+如果 prompt 中包含【🧠 人格参考】，其中的对话指纹和风景指纹是本作角色的说话方式和景物描写模板。设计情节点时：
+- 对话场景的情节点应体现对话指纹中的情绪表达方式和角色声音差异
+- 涉及景物描写的场景应体现风景指纹中的切入方式和情绪承载模式
 
 ## 约束与禁区（这是最重要的字段）
 - **forbidden**：本章绝对禁止出现的剧情内容（3-5条）。告诉AI"只能写到这里，不能碰这些"。格式："禁止：XXX在本章被揭露/确认/出现"
@@ -1004,6 +1189,25 @@ export default function Workspace() {
       newPlan.volume_version = (volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1]) || {} as any).version || 1
       newPlan.plan_version = 1
 
+      // V2 强制校验：确保关键字段存在
+      if (!newPlan.plot_beats || newPlan.plot_beats.length === 0) newPlan.plot_beats = ['开始本章情节']
+      if (!newPlan.forbidden) newPlan.forbidden = ['禁止引入未登场的新核心角色']
+      if (!newPlan.emotional_arc) newPlan.emotional_arc = '推进→转折→收束'
+      if (!newPlan.scene_count) newPlan.scene_count = 3
+      if (!newPlan.opening_hook) newPlan.opening_hook = { type: '悬念式', detail: '以具体场景开始' }
+      if (!newPlan.closing_hook) newPlan.closing_hook = { type: '动作中断式', impact: '中' }
+
+      // v4.0: 禁区补充已由细纲 prompt 处理，不再从旧表读取
+      try {
+        const trackers = await trackerService.getChapterTracker(Number(id), chapNum - 1)
+        // 从上一章章表读取角色状态作为禁区参考
+        for (const t of trackers) {
+          if (t.tracker_type === 'character' && !newPlan.forbidden!.some((f: string) => f.includes(t.tracker_key))) {
+            // 不再自动添加禁区，保持细纲 prompt 生成的内容
+          }
+        }
+      } catch {}
+
       // 从 DB 读取最新细纲（避免循环中闭包 state 过期导致覆盖）
       let latestPlans: ChapterPlan[] = chapterPlans
       try {
@@ -1015,6 +1219,19 @@ export default function Workspace() {
       merged.sort((a, b) => a.chapter_number - b.chapter_number)
       await saveChapterPlans(merged)
       showToast('success', `第${chapNum}章细纲已生成：${newPlan.title}`)
+      // v4.0: 写入章表初始 state（从细纲推断）
+      try {
+        for (const char of (newPlan.characters || [])) {
+          await trackerService.upsertTracker({
+            project_id: Number(id), tier: 'chapter', volume_number: 0,
+            chapter_number: chapNum, tracker_type: 'character', tracker_key: char,
+            summary: `${char} 出场于第${chapNum}章 "${newPlan.title}"`,
+            state: { emotion: newPlan.emotional_arc?.split('→')[0] || '', goal: newPlan.core_event || '', location: '', relationships: {}, scene: '', unfinished_action: '' },
+            status: '',
+          })
+        }
+        setCanonRefresh(prev => prev + 1)
+      } catch {}
     } catch (e: any) {
       if (cancelledRef.current) { showToast('info', '已取消生成'); throw e }
       else showToast('error', `第${chapNum}章细纲生成失败：${e.message || '未知错误'}`)
@@ -1026,12 +1243,23 @@ export default function Workspace() {
   /** 生成某一章正文 — 流式输出 + 卡片上下文 + 自动摘要 */
   const genChapter = async (chapNum: number, config?: any, hint?: string) => {
     if (!project || !window.electronAPI) return
-    const plan = chapterPlans.find(p => p.chapter_number === chapNum)
+    let plan = chapterPlans.find(p => p.chapter_number === chapNum)
+    // 自动续写刚生成的细纲可能尚未同步到 state，从 DB 回退读取
+    if (!plan) {
+      try {
+        const row = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+        if (row?.chapters) {
+          plan = JSON.parse(row.chapters).find((p: any) => p.chapter_number === chapNum)
+        }
+      } catch {}
+    }
     if (!plan) { showToast('error', '该章尚无细纲，请先生成对应卷的细纲'); return }
 
     setShowGenPanel(null); setGenHint('')
     setGenerating(true); setGenTarget(`第${chapNum}章`)
     setStreamingText('')
+    setLastCheckResult(null); setCheckedChapter(null)
+    autoContinueRef.current = true  // v3.0: 重置续写链标志
 
     try {
       const { styleContext, personalityContext } = config
@@ -1041,7 +1269,14 @@ export default function Workspace() {
 
       // 找所在卷
       const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
-      const volContext = vol ? `【所在卷】第${vol.volume_number}卷《${vol.title}》\n概要：${vol.summary}\n主题：${vol.theme}` : ''
+      const volContext = vol
+        ? `【所在卷】第${vol.volume_number}卷《${vol.title}》\n概要：${vol.summary}\n主题：${vol.theme}` +
+          (vol.pacing_design ? `\n节奏设计：${vol.pacing_design}` : '') +
+          (vol.emotional_cadence ? `\n情绪节奏：${vol.emotional_cadence}` : '') +
+          (vol.cool_density ? `\n爽点密度：${vol.cool_density}` : '') +
+          (vol.connection_prev ? `\n承接上卷：${vol.connection_prev}` : '') +
+          (vol.connection_next ? `\n铺垫下卷：${vol.connection_next}` : '')
+        : ''
 
       // 找章节所在节点
       let nodeContext = ''
@@ -1061,205 +1296,50 @@ export default function Workspace() {
         }
       }
 
-      // 上一章
-      const prevCh = chapters.find(c => c.chapter_number === chapNum - 1)
-      const prevExcerpt = prevCh?.content?.slice(-800) || ''
-
-      // 前一章摘要（记录官）
-      let prevSummaryContext = ''
-      try {
-        const prevSummary = await window.electronAPI.db.get('SELECT summary FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum - 1])
-        if (prevSummary?.summary) prevSummaryContext = `\n\n【前一章摘要（记录官）】\n${prevSummary.summary}`
-      } catch {}
-
-      // 事实簿（硬规则注入）
-      let canonFactsContext = ''
-      let infoPermissionContext = ''
-      try {
-        const hardFacts = await window.electronAPI.db.query(
-          'SELECT fact_category, fact_key, fact_value FROM canon_facts WHERE project_id = ? AND is_hard_rule = 1',
-          [Number(id)]
-        )
-        if (hardFacts.length > 0) {
-          canonFactsContext = hardFacts.map((f: any) =>
-            `- [${f.fact_category}] ${f.fact_key}: ${f.fact_value}`
-          ).join('\n')
-        }
-        // 公开度分级注入
-        const allFactsWithLevel = await window.electronAPI.db.query(
-          'SELECT fact_key, fact_value, fact_category, revealed_level, dependencies FROM canon_facts WHERE project_id = ? AND revealed_level < 100',
-          [Number(id)]
-        )
-        if (allFactsWithLevel.length > 0) {
-          const forbidden: string[] = []   // revealed_level = 0 的完全禁止
-          const limited: string[] = []     // revealed_level < 50 的部分限制
-          for (const f of allFactsWithLevel) {
-            const lv = f.revealed_level || 0
-            const deps = (() => { try { return JSON.parse(f.dependencies || '[]') } catch { return [] } })()
-            if (lv === 0) {
-              forbidden.push(`禁止揭示：${f.fact_key}（${f.fact_value}）`)
-            } else if (lv < 50) {
-              limited.push(`${f.fact_key}（公开度${lv}%，可适度推进但禁止完全揭示）`)
-            }
-          }
-          if (forbidden.length + limited.length > 0) {
-            infoPermissionContext = '【🔐 信息权限——以下设定尚未公开或仅部分公开】\n'
-            if (forbidden.length) infoPermissionContext += '⛔ 完全未公开（本章禁止揭示）：\n' + forbidden.map(s => `  ${s}`).join('\n') + '\n'
-            if (limited.length) infoPermissionContext += '⚠️ 部分公开（可推进但禁止完全揭示）：\n' + limited.map(s => `  ${s}`).join('\n')
-          }
-        }
-      } catch {}
-
-      // 从 canon_facts 读取设定（供一致性检查和上下文注入共用）
-      let allFacts: any[] = []
-      try {
-        allFacts = await window.electronAPI!.db.query(
-          'SELECT fact_category, fact_key, fact_value, details FROM canon_facts WHERE project_id = ?',
-          [Number(id)]
-        )
-      } catch {}
-
-      // 生成前一致性检查清单
-      let consistencyChecklist = ''
-      let timelineCheck = ''; let stateContext = ''; let stateDrift = 0.03
-      let narrativeMode: ReturnType<typeof selectMode> = 'stable'
-      try {
-        const checklist: string[] = []
-        const urgentFS = await window.electronAPI.db.query(
-          `SELECT foreshadow_id, description, target_chapter FROM foreshadowing_registry
-           WHERE project_id = ? AND status = 'active' AND target_chapter <= ?`,
-          [Number(id), chapNum + 3]
-        )
-        if (urgentFS.length > 0) {
-          checklist.push('【🪝 伏笔预警 — 近期需回收】')
-          urgentFS.forEach((f: any) => checklist.push(`- ${f.foreshadow_id}: ${f.description} (目标第${f.target_chapter}章)`))
-        }
-        const summaryRows = await window.electronAPI.db.query(
-          `SELECT characters_appeared FROM chapter_summaries WHERE project_id = ? AND chapter_number >= ? ORDER BY chapter_number DESC`,
-          [Number(id), Math.max(1, chapNum - 10)]
-        )
-        if (summaryRows.length > 0) {
-          const mainChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
-            let d: any = {}
-            try { d = JSON.parse(f.details || '{}') } catch {}
-            return { name: f.fact_key, role_type: d.role_type || 'support' }
-          }).filter((c: any) => c.role_type === 'main')
-          for (const mc of mainChars) {
-            let lastApp = 0
-            for (const sr of summaryRows) {
-              const appeared: string[] = typeof sr.characters_appeared === 'string'
-                ? JSON.parse(sr.characters_appeared || '[]') : (sr.characters_appeared || [])
-              if (appeared.includes(mc.name)) { lastApp = chapNum; break }
-            }
-            if (lastApp > 0 && chapNum - lastApp >= 10) {
-              checklist.push(`⚠ 主角「${mc.name}」已缺席 ${chapNum - lastApp} 章`)
-            }
-          }
-        }
-        // 时间线上下文 + 叙事状态聚合
-        let dayRow: any = null
+      // v4.0: 上一章结束状态（从 story_tracker 读取，替代旧 prevExcerpt + prevStateContext）
+      let endingStateContext = ''
+      if (chapNum > 1) {
         try {
-          dayRow = await window.electronAPI.db.get(
-            "SELECT MAX(absolute_day) as cur_day, timeline_id FROM story_timeline WHERE project_id = ? GROUP BY timeline_id ORDER BY timeline_id",
-            [Number(id)]
-          )
-          if (dayRow) {
-            timelineCheck = `【⏱ 时间线上下文】当前主线第${dayRow.cur_day || 0}天。如果本章包含闪回/并行时间线，切换时用明确的时间标记（如"三年前""同一时刻，XX城"），闪回段不超过500字。`
+          const endingState = await trackerService.getEndingState(Number(id), chapNum - 1)
+          if (endingState) {
+            const parts: string[] = []
+            if (endingState.scene) parts.push(`场景: ${endingState.scene}`)
+            if (endingState.emotion) parts.push(`情绪: ${endingState.emotion}`)
+            if (endingState.unfinished_action) parts.push(`未完成: ${endingState.unfinished_action}`)
+            if (parts.length > 0) endingStateContext = `【上章结尾状态】\n${parts.join('，')}`
           }
-          // 叙事状态聚合
-          const rlRows = await window.electronAPI.db.query(
-            "SELECT fact_key, revealed_level FROM canon_facts WHERE project_id = ? AND revealed_level IS NOT NULL",
-            [Number(id)]
-          )
-          const vol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
-          const es = (vol as any)?.emotion_stage
-          const currentDay = parseInt(dayRow?.cur_day || '0')
-          // v2.3: 冲突 + 漂移数据
-          let activeConflicts = 0; let speculativeCount = 0; let avgStability = 0.5
-          let conflictItems: any[] = []
-          try {
-            conflictItems = await window.electronAPI!.db.query(
-              "SELECT * FROM conflict_facts WHERE project_id = ? AND resolution_status IN ('unresolved','permanent')",
-              [Number(id)]
-            )
-            activeConflicts = conflictItems.length
-            const allFacts = await window.electronAPI!.db.query(
-              "SELECT details FROM canon_facts WHERE project_id = ? AND details IS NOT NULL AND details != ''",
-              [Number(id)]
-            )
-            let tvSum = 0; let tvCount = 0
-            for (const f of allFacts) {
-              let d: any = {}
-              try { d = JSON.parse(f.details || '{}') } catch {}
-              if (typeof d.truth_value === 'number') { tvSum += d.truth_value; tvCount++ }
-              if (d.truth_value < 0.4) speculativeCount++
-            }
-            avgStability = tvCount > 0 ? tvSum / tvCount : 0.5
-          } catch { /* advisory */ }
-          stateDrift = computeStateDrift(activeConflicts, speculativeCount, avgStability)
-
-          // v2.5: 叙事模式选择
-          const curVol = volumes.find(v => chapNum >= v.chapter_range[0] && chapNum <= v.chapter_range[1])
-          const totalInVol = curVol ? curVol.chapter_range[1] - curVol.chapter_range[0] + 1 : 1
-          const chapterInVol = curVol ? chapNum - curVol.chapter_range[0] + 1 : 1
-          narrativeMode = selectMode(chapterInVol, totalInVol, activeConflicts, stateDrift)
-          const effectiveDrift = stateDrift + modeDriftBonus(narrativeMode)
-
-          stateContext = buildStateContext(
-            rlRows, es, currentDay,
-            plan.allowed_reveal, plan.emotion_cap,
-            conflictItems.map((c: any) => ({ a: c.fact_a_text, b: c.fact_b_text, type: c.conflict_type, status: c.resolution_status })),
-            effectiveDrift, speculativeCount, avgStability,
-            narrativeMode,
-          )
         } catch {}
+      }
 
-        if (checklist.length > 0) {
-          consistencyChecklist = '⚠️ 生成前一致性检查清单（请逐条确认本章不违反）：\n' + checklist.join('\n')
-          consistencyChecklist = '⚠️ 生成前一致性检查清单（请逐条确认本章不违反）：\n' + checklist.join('\n')
+      // v4.0: 本章章表状态上下文（从 story_tracker 读取，替代旧 canonFactsContext）
+      let trackerContext = ''
+      try {
+        const chapterTrackers = await trackerService.getChapterTracker(Number(id), chapNum)
+        if (chapterTrackers && chapterTrackers.length > 0) {
+          const lines = chapterTrackers.map((t: any) =>
+            `- [${t.tracker_type}] ${t.tracker_key}: ${t.summary}`
+          )
+          trackerContext = '【状态追踪——本章角色/事件/伏笔预期状态】\n' + lines.join('\n')
         }
-        if (timelineCheck) consistencyChecklist = (consistencyChecklist ? consistencyChecklist + '\n\n' : '') + timelineCheck
       } catch {}
 
+      // v4.0: 精简后的正文注入（~4000 chars）
       const planAny = plan as any
-      let userPrompt = (stateContext ? stateContext + '\n\n' : '') + CHAPTER_USER(
+      let userPrompt = CHAPTER_USER(
         project.title, prepareContent.slice(0, 500), chapNum, plan.title,
         plan.summary || '', plan.characters || [], plan.key_events || [], plan.estimated_words || 3000,
         planAny.emotional_goal || planAny.emotional_arc || '', planAny.function || '', planAny.ending_type || '自然收尾',
-        styleContext, plotSummary, prevExcerpt,
-        (volContext + nodeContext + '\n\n' + prevSummaryContext),
-        canonFactsContext, personalityContext,
+        styleContext, plotSummary, endingStateContext,
+        (volContext + nodeContext),
+        trackerContext, personalityContext,
         plan.plot_beats, plan.emotional_arc, plan.cool_moment,
         plan.forbidden, plan.scene_count, plan.max_info_reveal, plan.emotion_cap,
         (plan as any).opening_hook, (plan as any).closing_hook
       ) + (hint ? '\n\n【作者额外提示】\n' + hint : '')
-        + (consistencyChecklist ? '\n\n' + consistencyChecklist : '')
-        + (infoPermissionContext ? '\n\n' + infoPermissionContext : '')
 
-      // 注入智能上下文（按热度分级）
-      try {
-        const recentText = chapters.slice(-3).map(c => c.content).join('\n').slice(-3000)
-        const allChars = allFacts.filter((f: any) => f.fact_category === 'character').map((f: any) => {
-          let d: any = {}
-          try { d = JSON.parse(f.details || '{}') } catch {}
-          return { name: f.fact_key, role_type: d.role_type || 'support', personality: f.fact_value, status_tracking: d.status_tracking || {}, abilities: d.abilities || '' }
-        })
-        const allWorlds = allFacts.filter((f: any) => f.fact_category === 'setting' || f.fact_category === 'rule').map((f: any) => {
-          let d: any = {}
-          try { d = JSON.parse(f.details || '{}') } catch {}
-          return { name: f.fact_key, description: f.fact_value, is_global: d.is_global ? 1 : 0, trigger_keywords: d.trigger_keywords || '' }
-        })
-        const { charContext: mcChar, worldContext: mcWorld, tokenEstimate: mcTokens } = buildMinimalContext(
-          chapNum, plan.characters || [], allChars, allWorlds, recentText
-        )
-        let ctxParts: string[] = []
-        if (mcChar) ctxParts.push(`【👤 角色上下文】\n${mcChar}`)
-        if (mcWorld) ctxParts.push(`【🌍 世界设定】\n${mcWorld}`)
-        if (ctxParts.length > 0) {
-          userPrompt += `\n\n${ctxParts.join('\n\n')}`
-        }
-        setBudgetInfo({ charTokens: mcTokens, totalChars: userPrompt.length })
-      } catch {}
+      // v3.2: 强化字数约束 — 显式要求，防止 AI 偷懒
+      const minWords = Math.floor((plan.estimated_words || 3000) * 0.85)
+      userPrompt += `\n\n⚠️ 重要要求：本章必须写满 ${plan.estimated_words || 3000} 字（至少 ${minWords} 字），逐条完成上方所有情节点后方可收尾。未完成不允许结束。`
 
       // 使用流式 API
       let fullText = ''
@@ -1277,7 +1357,7 @@ export default function Workspace() {
       })
 
       const reply = await window.electronAPI.aiChatStream([
-        { role: 'system', content: CHAPTER_SYSTEM },
+        { role: 'system', content: buildExecutionConstraints(styleContext, personalityContext) + '\n\n' + CHAPTER_SYSTEM },
         { role: 'user', content: userPrompt },
       ], '章节生成')
 
@@ -1297,367 +1377,116 @@ export default function Workspace() {
       await updateContext(chapNum, finalText)
       showToast('success', `第${chapNum}章生成完成`)
 
-      // ── v2.2 记录官 + 事件提取器 + Checker(含语义泄露评分) + 语义快照重写 + State 统一写入 ──
+      // v4.0: 同步提取章表状态（替代旧记录官，在主流程中运行）
+      try {
+        const prevTracker = await trackerService.getChapterTracker(Number(id), chapNum - 1)
+        const count = await trackerService.extractChapterState(Number(id), chapNum, finalText, prevTracker)
+        if (count > 0) setCanonRefresh(prev => prev + 1)
+      } catch {}
+
+      // v4.0: 剧情跑偏检查（简化版——从 lastCheckResult 读取）
+      if (stopOnPlotDeviation && !cancelledRef.current && queueEndChapter > 0) {
+        if (lastCheckResult && lastCheckResult.hardViolationCount > 3) {
+          const confirmed = window.confirm(
+            `第${chapNum}章检测到 ${lastCheckResult.hardViolationCount} 处违规。\n\n是否暂停自动续写？\n\n点「确定」暂停，点「取消」继续。`
+          )
+          if (confirmed) {
+            setQueueEndChapter(0)
+            autoContinueRef.current = false
+            showToast('info', '自动续写已暂停')
+            return
+          }
+        }
+      }
+
+      // ── v3.0 自动续写检测（含自动生成细纲+卷纲）──
+      if (!cancelledRef.current && queueEndChapter > 0) {
+        const nextChapter = chapNum + 1
+        if (nextChapter > queueEndChapter) {
+          showToast('success', `自动续写完成：第${queueEndChapter}章已完成`)
+          setQueueEndChapter(0)
+          return
+        }
+        setTimeout(async () => {
+          try {
+          if (!autoContinueRef.current) return
+          // v4.0: 章表已同步提取，无需等待
+          let curVol = volumes.find(v => nextChapter >= v.chapter_range[0] && nextChapter <= v.chapter_range[1])
+          if (!curVol) {
+            // v4.0: 卷结束时运行卷检查
+            const completedVol = volumes[volumes.length - 1]
+            if (completedVol) {
+              try {
+                const chNums: number[] = []
+                for (let cn = completedVol.chapter_range[0]; cn <= completedVol.chapter_range[1]; cn++) chNums.push(cn)
+                const report = await trackerService.runVolumeCheck(Number(id), completedVol.volume_number, chNums)
+                setCanonRefresh(prev => prev + 1)
+                if (report.rule_violations.length > 0 || report.character_deviations.length > 0) {
+                  showToast('info', `卷${completedVol.volume_number}检查：${report.score}分，${report.rule_violations.length}个违规`)
+                }
+              } catch {}
+            }
+            showToast('info', `正在生成第${volumes.length + 1}卷卷纲...`)
+            await genSingleVolume()
+            if (!autoContinueRef.current) return
+            // genSingleVolume 写入 DB，但 state 未刷新 → 从 DB 读取
+            try {
+              const dbVols = await window.electronAPI!.db.query('SELECT * FROM volumes WHERE project_id = ?', [Number(id)])
+              const allVols = dbVols.map((v: any) => ({ ...v, chapter_range: typeof v.chapter_range === 'string' ? JSON.parse(v.chapter_range) : v.chapter_range }))
+              curVol = allVols.find((v: any) => nextChapter >= v.chapter_range[0] && nextChapter <= v.chapter_range[1])
+            } catch {}
+            if (!curVol) {
+              showToast('error', '卷纲生成失败，自动续写中断')
+              setQueueEndChapter(0)
+              return
+            }
+          }
+          let nextPlan = chapterPlans.find(p => p.chapter_number === nextChapter)
+          if (!nextPlan) {
+            try {
+              const row = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+              if (row?.chapters) nextPlan = JSON.parse(row.chapters).find((p: any) => p.chapter_number === nextChapter)
+            } catch {}
+          }
+          if (!nextPlan) {
+            showToast('info', `正在生成第${nextChapter}章细纲...`)
+            await genSingleChapterPlan(nextChapter)
+            if (!autoContinueRef.current) return
+            // 验证写入成功
+            try {
+              const row = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+              if (row?.chapters) nextPlan = JSON.parse(row.chapters).find((p: any) => p.chapter_number === nextChapter)
+            } catch {}
+            if (!nextPlan) {
+              showToast('error', `第${nextChapter}章细纲生成失败，自动续写中断`)
+              setQueueEndChapter(0)
+              return
+            }
+          }
+          genChapterRef.current(nextChapter)
+          } catch (e) { console.error('auto-continue error:', e); showToast('error', '自动续写出错，已暂停'); setQueueEndChapter(0) }
+        }, 1500)
+      }
+
+      // v4.0: Checker（保留，仍在 background 运行）
       ;(async () => {
         const pid = Number(id)
-        const currentChapterText = finalText
         try {
-          // 1. 并行调用：记录官（人类可读摘要+伏笔+ai_concerns）+ 事件提取器（结构化事件）
-          const [summaryReply, eventReply] = await Promise.all([
-            window.electronAPI!.aiChat([
-              { role: 'system', content: CHAPTER_SUMMARY_SYSTEM },
-              { role: 'user', content: CHAPTER_SUMMARY_USER(chapNum, plan.title, currentChapterText, outlineContent) },
-            ], '章节摘要'),
-            window.electronAPI!.aiChat([
-              { role: 'system', content: EVENT_EXTRACTION_SYSTEM },
-              { role: 'user', content: EVENT_EXTRACTION_USER(chapNum, plan.title, currentChapterText, outlineContent, plan.characters || []) },
-            ], '事件提取'),
-          ])
-
-          let s: any = null
-          const sjm = summaryReply.match(/\{[\s\S]*\}/)
-          if (sjm) s = JSON.parse(sjm[0])
-
-          let extractedEvents: any = null
-          const ejm = eventReply.match(/\{[\s\S]*\}/)
-          if (ejm) extractedEvents = JSON.parse(ejm[0])
-
-          // 2. 获取时间线历史和 facts（供 checker 和 snapshot 使用）
-          let timelineHistory: any[] = []
-          let allFacts: any[] = []
-          let currentAbsoluteDay: number | null = null
-          try {
-            const [th, af, dayRow] = await Promise.all([
-              window.electronAPI!.db.query('SELECT * FROM story_timeline WHERE project_id = ? ORDER BY absolute_day ASC', [pid]),
-              window.electronAPI!.db.query('SELECT * FROM canon_facts WHERE project_id = ?', [pid]),
-              window.electronAPI!.db.get('SELECT MAX(absolute_day) as d FROM story_timeline WHERE project_id = ?', [pid]),
-            ])
-            timelineHistory = th; allFacts = af
-            currentAbsoluteDay = dayRow?.d || null
-          } catch { /* advisory */ }
-
-          // 3. Checker（① deterministic + ② structural + ③ semantic leak scorer, projectId for calibration）
           const checkResult = checkChapter(
-            currentChapterText, plan, allFacts, timelineHistory,
-            currentAbsoluteDay, pid,
-            undefined, undefined, stateDrift, narrativeMode,
+            finalText, plan, [], [], null, pid, undefined, undefined, 0.03, 'stable'
           )
-
-          // 4. 收集 AI concerns（记录官的 ai_concerns + leak score elevated）
-          if (s?.ai_concerns && Array.isArray(s.ai_concerns) && s.ai_concerns.length > 0) {
-            checkResult.concerns = [...checkResult.concerns, ...s.ai_concerns]
-          }
-
-          // 4.5. 存储 checker/event 数据到 state（供 ReviewPanel 控制台消费）
           setLastCheckResult(checkResult)
           if (checkResult.leakScore) setLastLeakScore(checkResult.leakScore)
-          if (extractedEvents?.events) setLastEventData(extractedEvents as EventExtractionResult)
           setCalibrationStats(getCalibrationStats(pid))
-
-          // 5. 构建角色名列表（供语义快照使用）
-          const charNames = allFacts
-            .filter((f: any) => f.fact_category === 'character')
-            .map((f: any) => f.fact_key)
-
-          // 6. Rewrite Loop（熔断 + 语义 diff）
-          let activeText = currentChapterText
-          let rewriteCount = 0
-          const { maxRetries, entropyLimit } = DEFAULT_REWRITE_LIMIT
-
-          // 建立语义快照（首次 rewrite 前）
-          let snapshot = takeSnapshot(activeText, chapNum, charNames)
-
-          while (checkResult.hardViolationCount > 0 && rewriteCount <= maxRetries) {
-            if (cancelledRef.current) break
-
-            if (rewriteCount >= maxRetries) {
-              const marks = checkResult.violations
-                .filter(v => v.source !== 'ai_suggestion')
-                .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
-                .join('\n')
-              activeText = marks + '\n' + activeText
-              showToast('info', `约束重写${maxRetries}次仍未解决，已标记违规段落供人工处理`)
-              break
-            }
-
-            showToast('info', `硬约束违规 ${checkResult.hardViolationCount} 处，自动重写 (${rewriteCount + 1}/${maxRetries})...`)
-
-            try {
-              const rewritePrompt = buildRewritePrompt(activeText, checkResult.violations, snapshot)
-              const rewriteMsg = [
-                { role: 'system' as const, content: '你是小说修改助手。按指令精准修改文本，只改违规部分。' },
-                { role: 'user' as const, content: `原文：\n${activeText.slice(0, 6000)}\n\n${rewritePrompt}` },
-              ]
-              const rewritten = await window.electronAPI!.aiChat(rewriteMsg, '违规重写')
-
-              if (!rewritten || cancelledRef.current) break
-
-              // AI 返回与原文相同——跳过无效重写
-              if (rewritten.trim() === activeText.trim()) {
-                showToast('info', 'AI 重写未修改文本，跳过')
-                break
-              }
-
-              // 语义 diff：检测重写是否改变了不该变的段落
-              const diff = diffSnapshot(snapshot, rewritten, charNames)
-              if (!diff.isStable || diff.semanticChangeRatio > 0.35) {
-                const marks = checkResult.violations
-                  .filter(v => v.source !== 'ai_suggestion')
-                  .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
-                  .join('\n')
-                activeText = marks + '\n' + activeText
-                showToast('info', `重写语义漂移过大（${Math.round(diff.semanticChangeRatio * 100)}%），保留原文并标记`)
-                break
-              }
-
-              // 传统 infoLoss 检查（与语义 diff 互补）
-              const infoLoss = calcInfoLoss(activeText, rewritten)
-              if (infoLoss > entropyLimit) {
-                const marks = checkResult.violations
-                  .filter(v => v.source !== 'ai_suggestion')
-                  .map(v => `<!-- ⚠ 约束未解决：${v.type} — ${v.detail} -->`)
-                  .join('\n')
-                activeText = marks + '\n' + activeText
-                showToast('info', `重写信息损失 ${Math.round(infoLoss * 100)}% 超限，保留原文并标记`)
-                break
-              }
-
-              // 重写后复查
-              const reCheck = checkChapter(
-                rewritten, plan, allFacts, timelineHistory,
-                currentAbsoluteDay, pid,
-                undefined, undefined, stateDrift, narrativeMode,
-              )
-              if (reCheck.hardViolationCount === 0) {
-                activeText = rewritten
-                snapshot = takeSnapshot(rewritten, chapNum, charNames) // 更新快照
-                setEditingContent(rewritten)
-                await saveChapter(chapNum, plan.title, rewritten)
-                showToast('success', '违规已修复，已保存重写版本')
-                break
-              }
-
-              activeText = rewritten
-              snapshot = takeSnapshot(rewritten, chapNum, charNames)
-              checkResult.violations = reCheck.violations
-              checkResult.hardViolationCount = reCheck.hardViolationCount
-              if (reCheck.leakScore) checkResult.leakScore = reCheck.leakScore
-              rewriteCount++
-            } catch {
-              showToast('info', '重写调用失败，保留原文')
-              break
+          if (checkResult.hardViolationCount > 0) {
+            setCheckedChapter(chapNum)
+            const markers = buildViolationMarkers(checkResult.violations)
+            if (markers) {
+              setEditingContent(markers + '\n' + finalText)
+              await saveChapter(chapNum, plan.title, markers + '\n' + finalText)
             }
           }
-
-          if (rewriteCount > 0 && checkResult.hardViolationCount === 0) {
-            setEditingContent(activeText)
-            await saveChapter(chapNum, plan.title, activeText)
-          }
-
-          // 7. 从事件提取器 + 记录官伏笔数据构建 StatePatch（事件驱动，非 LLM 总结驱动）
-          try {
-            const planted: any[] = Array.isArray(s?.foreshadowing_planted) ? s.foreshadowing_planted : []
-            const recovered: any[] = Array.isArray(s?.foreshadowing_recovered) ? s.foreshadowing_recovered : []
-
-            const foreshadowingPlanted = planted.map((item: any, fi: number) => ({
-              id: typeof item === 'string' ? `F${String(chapNum).padStart(3, '0')}-${fi + 1}` : (item.id || `F${String(chapNum).padStart(3, '0')}-${fi + 1}`),
-              desc: typeof item === 'string' ? item : (item.desc || item.description || ''),
-            })).filter((p: any) => p.desc)
-
-            const foreshadowingRecovered = recovered.map((item: any) => ({
-              id: typeof item === 'string' ? null : (item.id || null),
-              desc: typeof item === 'string' ? item : (item.desc || item.description || ''),
-            })).filter((p: any) => p.desc || p.id)
-
-            // 如果事件提取器成功，从事件构建 StatePatch；否则回退到旧 buildPatch
-            const events = extractedEvents?.events || []
-            const patch = events.length > 0
-              ? buildStatePatchFromEvents(events, chapNum, foreshadowingPlanted, foreshadowingRecovered, checkResult.concerns)
-              : (() => {
-                // 回退：从记录官数据手动构建
-                const absDay = (s as any)?.absolute_day || null
-                const keyEvents: string[] = Array.isArray(s?.key_events) ? s.key_events : []
-                const timeLabels: string[] = Array.isArray(s?.time_labels) ? s.time_labels : []
-                return {
-                  summary: {
-                    chapter_number: chapNum, summary: s?.summary || '',
-                    characters_appeared: Array.isArray(s?.characters_appeared) ? s.characters_appeared : [],
-                    locations: Array.isArray(s?.locations) ? s.locations : [],
-                    key_events: keyEvents, time_labels: timeLabels, absolute_day: absDay,
-                    foreshadowing_planted: foreshadowingPlanted, foreshadowing_recovered: foreshadowingRecovered,
-                    character_changes: s?.character_changes || {}, world_changes: s?.world_changes || {},
-                    relationship_changes: Array.isArray(s?.relationship_changes) ? s.relationship_changes : [],
-                  },
-                  foreshadowing_new: foreshadowingPlanted.filter((f: any) => f.desc).map((f: any) => ({ foreshadow_id: f.id!, description: f.desc, chapter_number: chapNum })),
-                  foreshadowing_done: foreshadowingRecovered.filter((f: any) => f.id).map((f: any) => ({ foreshadow_id: f.id!, chapter_number: chapNum })),
-                  timeline_events: keyEvents.map((ev: string, ei: number) => ({
-                    chapter_number: chapNum, event_order: ei, event_description: ev,
-                    time_label: timeLabels[0] || '', absolute_day: absDay,
-                    location: Array.isArray(s?.locations) ? s.locations[0] || '' : '',
-                    characters_involved: JSON.stringify(Array.isArray(s?.characters_appeared) ? s.characters_appeared : []),
-                    is_major: ei === 0 ? 1 : 0,
-                  })),
-                  character_arcs: Object.entries(s?.character_changes || {}).map(([cn, d]) => ({ character_name: cn, chapter_number: chapNum, change_type: 'development', change_description: String(d) })),
-                  relationship_changes: (Array.isArray(s?.relationship_changes) ? s.relationship_changes : []).filter((rc: any) => rc.char_a && rc.char_b && rc.change).map((rc: any) => ({ char_a: rc.char_a, char_b: rc.char_b, chapter_number: chapNum, relation_type: rc.type || 'ally', change_description: rc.change })),
-                }
-              })()
-
-            // 模糊匹配兜底回收伏笔
-            const recDescItems = recovered.filter((item: any) => {
-              const desc = typeof item === 'string' ? item : (item.desc || item.description || '')
-              return desc && !(typeof item === 'object' && item.id)
-            })
-            for (const recItem of recDescItems) {
-              const recDesc = typeof recItem === 'string' ? recItem : (recItem.desc || recItem.description || '')
-              if (recDesc) {
-                try {
-                  await window.electronAPI!.db.run(
-                    `UPDATE foreshadowing_registry SET status='done',resolved_chapter=?,updated_at=datetime('now','localtime') WHERE project_id=? AND description LIKE ? AND status!='done'`,
-                    [chapNum, pid, `%${recDesc.slice(0, 30)}%`]
-                  )
-                } catch { /* best effort */ }
-              }
-            }
-            await applyStatePatches(window.electronAPI!.db, pid, patch)
-          } catch (e: any) {
-            console.error('State write failed:', e?.message || e)
-          }
-
-          // 7.5. P5: 自动回流新设定到 canon_facts（连续影响力模型 + 冲突检测）
-          try {
-            const charChanges: Record<string, string> = s?.character_changes || {}
-            const worldChanges: Record<string, string> = s?.world_changes || {}
-            const allEntries: { key: string; value: string; category: string }[] = [
-              ...Object.entries(charChanges).map(([k, v]) => ({ key: k, value: v, category: 'character' })),
-              ...Object.entries(worldChanges).map(([k, v]) => ({ key: k, value: v, category: 'setting' })),
-            ]
-            for (const entry of allEntries) {
-              if (!entry.key || !entry.value) continue
-              let occCount = 0
-              try {
-                const prevRows = await window.electronAPI!.db.query(
-                  `SELECT summary FROM chapter_summaries WHERE project_id = ? AND chapter_number < ? ORDER BY chapter_number DESC LIMIT 10`,
-                  [pid, chapNum]
-                )
-                for (const row of prevRows) { if ((row.summary || '').includes(entry.key)) occCount++ }
-              } catch { /* advisory */ }
-              const shouldAdmit = (entry.category === 'character' && occCount >= 2) || (entry.category === 'setting' && occCount >= 1)
-              if (!shouldAdmit) continue
-
-              // Check for existing — if exists, update tv/stability; if new, insert
-              const existing = await window.electronAPI!.db.get(
-                `SELECT id, details FROM canon_facts WHERE project_id = ? AND fact_key = ? AND fact_category = ?`,
-                [pid, entry.key, entry.category]
-              )
-              if (existing) {
-                let d: any = {}
-                try { d = JSON.parse(existing.details || '{}') } catch {}
-                if (d.non_collapse) continue  // 🟣 非收敛事实 — 永不自动更新
-                const oldTv = typeof d.truth_value === 'number' ? d.truth_value : 0.5
-                const maxTv = oldTv >= 0.8 ? 1.0 : oldTv >= 0.4 ? 0.9 : 0.6  // 🔒 收敛上限
-                const tvDelta = modeTvDelta(narrativeMode)
-                d.truth_value = Math.min(maxTv, Math.max(0.1, oldTv + tvDelta))
-                d.stability = Math.min(1.0, (d.stability || 0.5) + 0.1)
-                // v2.5: 公开度随 truth_value 联动——被确认的事实自动公开
-                const newTv = d.truth_value
-                const currentRl = existing.revealed_level || 0
-                // tv 映射到 rl：tv=0.3→rl≈20, tv=0.6→rl≈50, tv=0.9→rl≈90
-                const targetRl = Math.round(newTv * 100)
-                const newRl = Math.max(currentRl, Math.min(100, Math.round((currentRl + targetRl) / 2)))
-                // 仅当目标更高时才更新
-                if (newRl > currentRl) {
-                  await window.electronAPI!.db.run(
-                    `UPDATE canon_facts SET revealed_level = ? WHERE id = ?`, [newRl, existing.id]
-                  )
-                }
-                d.conflict_weight = Math.max(0, (d.conflict_weight || 0) - 0.05)
-                await window.electronAPI!.db.run(
-                  `UPDATE canon_facts SET details = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
-                  [JSON.stringify(d), existing.id]
-                )
-              } else {
-                // New speculative entry
-                const confidence = occCount >= 3 ? 'high' : 'medium'
-                const details = JSON.stringify({ truth_value: 0.3, stability: 0.1, conflict_weight: 0, confidence, source_type: 'auto_extracted' })
-                await window.electronAPI!.db.run(
-                  `INSERT INTO canon_facts (project_id, fact_category, fact_key, fact_value, source, is_hard_rule, revealed_level, confidence, source_type, details)
-                   VALUES (?,?,?,?,'auto_extracted',0,${entry.category === 'character' ? 50 : 30},?,?,?)`,
-                  [pid, entry.category, entry.key, String(entry.value).slice(0, 200), confidence, 'auto_extracted', details]
-                )
-              }
-
-              // 🟣 冲突检测：新事实是否与已有 soft/hard 事实语义矛盾
-              if (occCount <= 2) {
-                try {
-                  const conflictingFacts = await window.electronAPI!.db.query(
-                    `SELECT id, fact_key, fact_value, details FROM canon_facts WHERE project_id = ? AND fact_category = ? AND id != ? AND (details LIKE '%"truth_value":0.%' AND CAST(json_extract(details, '$.truth_value') AS REAL) >= 0.4) LIMIT 5`,
-                    [pid, entry.category, existing?.id || 0]
-                  )
-                  for (const cf of conflictingFacts) {
-                    let cd: any = {}
-                    try { cd = JSON.parse(cf.details || '{}') } catch {}
-                    // Simple overlap check: shared keywords in fact_value
-                    const cfWords = new Set((cf.fact_value || '').split(/[，。、\s]+/))
-                    const entryWords = entry.value.split(/[，。、\s]+/)
-                    const overlap = entryWords.filter(w => cfWords.has(w) && w.length >= 2)
-                    if (overlap.length >= 2 && entryWords.some(w => w.includes('不') || w.includes('没') || w.includes('未') || w.includes('假'))) {
-                      // Potential contradiction — record it
-                      await window.electronAPI!.db.run(
-                        `INSERT OR IGNORE INTO conflict_facts (project_id, fact_a_id, fact_b_id, fact_a_text, fact_b_text, conflict_type, resolution_status, detected_chapter)
-                         VALUES (?,?,?,?,?,'ambiguity','unresolved',?)`,
-                        [pid, cf.id, existing?.id || null, `${cf.fact_key}: ${cf.fact_value.slice(0, 100)}`, `${entry.key}: ${entry.value.slice(0, 100)}`, chapNum]
-                      )
-                      // Update conflict_weight on the existing fact
-                      cd.conflict_weight = Math.min(1.0, (cd.conflict_weight || 0) + 0.1)
-                      await window.electronAPI!.db.run(
-                        `UPDATE canon_facts SET details = ? WHERE id = ?`,
-                        [JSON.stringify(cd), cf.id]
-                      )
-                      break // one conflict per entry is enough
-                    }
-                  }
-                } catch { /* conflict detection is best-effort */ }
-              }
-            }
-
-            // v2.5: 衰减未提及的事实（叙事遗忘曲线）
-            try {
-              const mentionedKeys = new Set(allEntries.map(e => e.key))
-              const allFacts = await window.electronAPI!.db.query(
-                "SELECT id, fact_key, details FROM canon_facts WHERE project_id = ? AND details IS NOT NULL AND details != ''",
-                [pid]
-              )
-              const decayRate = modeDecayRate(narrativeMode)
-              for (const f of allFacts) {
-                if (mentionedKeys.has(f.fact_key)) continue  // 本章提到了，不衰减
-                let d: any = {}
-                try { d = JSON.parse(f.details || '{}') } catch { continue }
-                if (d.non_collapse) continue  // 🟣 非收敛事实永不衰减
-                const oldTv = typeof d.truth_value === 'number' ? d.truth_value : 0.5
-                const isHard = oldTv >= 0.8
-                const effectiveDecay = isHard ? decayRate * 0.33 : decayRate  // hard_canon 衰减1/3
-                d.truth_value = Math.max(0.1, oldTv - effectiveDecay)
-                d.stability = Math.max(0.05, (d.stability || 0.5) - decayRate * 0.67)
-                await window.electronAPI!.db.run(
-                  "UPDATE canon_facts SET details = ?, updated_at = datetime('now','localtime') WHERE id = ?",
-                  [JSON.stringify(d), f.id]
-                )
-              }
-            } catch { /* decay is best-effort */ }
-          } catch { /* auto-feedback is non-blocking */ }
-
-          // 8. AI concerns + leak score 提示
-          if (checkResult.concerns && checkResult.concerns.length > 0) {
-            const concernSummary = checkResult.concerns
-              .slice(0, 3)
-              .map((c: any) => `⚠ ${c.type}: ${c.detail}`)
-              .join('\n')
-            if (concernSummary) showToast('info', `叙事建议（仅供参考）：\n${concernSummary}`)
-          }
-          if (checkResult.leakScore && checkResult.leakScore.threshold !== 'safe') {
-            showToast('info', `语义泄露评分：${checkResult.leakScore.raw} (z=${checkResult.leakScore.z}, ${checkResult.leakScore.threshold})`)
-          }
-        } catch { /* 摘要/检查流程失败不阻塞正文保存 */ }
+        } catch {}
       })()
     } catch (e: any) {
       if (!cancelledRef.current) showToast('error', '生成失败：' + e.message)
@@ -1683,15 +1512,14 @@ export default function Workspace() {
       if (window.electronAPI) {
         if (ch) {
           await window.electronAPI.db.run('DELETE FROM chapters WHERE id = ?', [ch.id])
-          // 清理关联数据
-          await window.electronAPI.db.run('DELETE FROM chapter_summaries WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
-          await window.electronAPI.db.run('DELETE FROM story_timeline WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
-          await window.electronAPI.db.run('DELETE FROM character_arc_log WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
-          await window.electronAPI.db.run('DELETE FROM relationship_timeline WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          // v4.0: 清理 tracker 关联数据（旧 chapter_summaries/story_timeline 等表已删除）
+          await window.electronAPI.db.run('DELETE FROM story_tracker WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
+          await window.electronAPI.db.run('DELETE FROM tracker_transitions WHERE project_id = ? AND chapter_number = ?', [Number(id), chapNum])
         }
         const newPlans = chapterPlans.filter(p => p.chapter_number !== chapNum)
         await saveChapterPlans(newPlans)
         await loadAll()
+        setCanonRefresh(prev => prev + 1)
         showToast('success', `${label}已删除`)
         if (selectedChapter === chapNum) {
           setEditingContent('')
@@ -1847,35 +1675,28 @@ export default function Workspace() {
         ? `world+${led.reveal_estimates.world}% plot+${led.reveal_estimates.plot}% character+${led.reveal_estimates.character}%`
         : '暂无'
 
-      // Foreshadowing counts
+      // v4.0: 伏笔计数（从 story_tracker 读取）
       let activeFS = 0, resolvedFS = 0
       try {
-        const fsRows = await window.electronAPI.db.query(
-          "SELECT status FROM foreshadowing_registry WHERE project_id = ?", [Number(id)]
-        )
-        for (const r of fsRows) { if (r.status === 'active') activeFS++; else if (r.status === 'done') resolvedFS++ }
-      } catch { /* advisory */ }
+        const fsTrackers = await trackerService.getMasterTracker(Number(id))
+        for (const t of fsTrackers) {
+          if (t.tracker_type === 'foreshadow') {
+            try { const st = (typeof t.state === 'string' ? JSON.parse(t.state) : t.state) || {}; if (st.status === 'resolved') resolvedFS++; else if (st.status !== 'resolved') activeFS++ } catch {}
+          }
+        }
+      } catch {}
 
-      // Recent summaries
+      // v4.0: 最近摘要（从 story_tracker chapter 层读取）
       let recentSummaries = '暂无'
       try {
-        const sumRows = await window.electronAPI.db.query(
-          "SELECT chapter_number, summary FROM chapter_summaries WHERE project_id = ? ORDER BY chapter_number DESC LIMIT 5",
-          [Number(id)]
-        )
-        if (sumRows.length > 0) {
-          recentSummaries = sumRows.map((r: any) => `第${r.chapter_number}章: ${(r.summary || '').slice(0, 100)}`).join('\n')
+        const allChaps = await trackerService.getVolumeTracker(Number(id), volumes[volumes.length - 1]?.volume_number || 1)
+        if (allChaps && allChaps.length > 0) {
+          recentSummaries = allChaps.slice(-5).map((t: any) => `第${t.chapter_number}章 [${t.tracker_type}]: ${(t.summary || '').slice(0, 100)}`).join('\n')
         }
-      } catch { /* advisory */ }
+      } catch {}
 
-      // Current day
-      let curDay = 0
-      try {
-        const dr = await window.electronAPI!.db.get(
-          "SELECT MAX(absolute_day) as cur_day FROM story_timeline WHERE project_id = ?", [Number(id)]
-        )
-        curDay = dr?.cur_day || 0
-      } catch { /* advisory */ }
+      // v4.0: 当前天数（简化为从章数估算）
+      let curDay = chapters.length
 
       const reply = await window.electronAPI.aiChat([
         { role: 'system', content: NARRATIVE_STATE_REPORT_SYSTEM },
@@ -1920,17 +1741,22 @@ export default function Workspace() {
   /** 大纲标准化 */
   const [normalizing, setNormalizing] = useState(false)
   const handleNormalizeOutline = async () => {
-    if (!fullscreenEdit || !fullscreenEdit.content.trim()) return
+    const sourceContent = fullscreenEdit?.content || outlineContent
+    if (!sourceContent.trim()) return
     setNormalizing(true)
     cancelledRef.current = false
     try {
       const reply = await window.electronAPI!.aiChat([
         { role: 'system', content: OUTLINE_NORMALIZE_SYSTEM },
-        { role: 'user', content: OUTLINE_NORMALIZE_USER(fullscreenEdit.content) },
+        { role: 'user', content: OUTLINE_NORMALIZE_USER(sourceContent) },
       ], '大纲标准化')
       if (cancelledRef.current) return
       if (reply) {
-        setFullscreenEdit({ ...fullscreenEdit, content: reply })
+        if (fullscreenEdit) {
+          setFullscreenEdit({ ...fullscreenEdit, content: reply })
+        } else {
+          await saveOutline(reply)
+        }
         showToast('success', '大纲已标准化')
       }
     } catch (e: any) {
@@ -1977,61 +1803,214 @@ export default function Workspace() {
   const cancelOperation = () => {
     cancelledRef.current = true
     window.electronAPI?.cancelAi()
-    setContinuing(false); setIdeaLoading(false); setGoldenLoading(false)
+    setIdeaLoading(false); setGoldenLoading(false)
+    setFixingViolations(false)
     showToast('info', '已取消')
   }
 
-  /** 续写 */
-  const [continuing, setContinuing] = useState(false)
-  const handleContinue = async () => {
-    if (!editingContent.trim() || !selectedChapter) return
-    setContinuing(true)
+  /** 手动触发违规修改。mode='selected' 时分段修改选中段落，mode='full' 时全文修改 */
+  const [fixingViolations, setFixingViolations] = useState(false)
+  const handleFixViolations = async (
+    mode: 'selected' | 'full' = 'full',
+    selectedParagraphs?: { index: number; text: string }[]
+  ) => {
+    const ctx = rewriteCtxRef.current
+    if (!ctx || !lastCheckResult || !editingContent || !window.electronAPI) return
+    setFixingViolations(true)
     cancelledRef.current = false
-    const plan = chapterPlans.find(p => p.chapter_number === selectedChapter)
-    try {
-      const { styleContext, personalityContext } = await getRefs()
-      // 组装续写约束
-      let extraConstraints = ''
-      if (plan?.forbidden?.length) extraConstraints += `\n⛔ 本章禁区：\n${plan.forbidden.map(f => `- ${f}`).join('\n')}`
-      if ((plan as any)?.emotion_cap) extraConstraints += `\n💕 感情上限：${(plan as any).emotion_cap}`
-      if ((plan as any)?.max_info_reveal) extraConstraints += `\n🔐 信息上限：${(plan as any).max_info_reveal}`
-      if (plan?.scene_count) extraConstraints += `\n🎬 场景数：${plan.scene_count}个`
 
-      // 节点上下文
-      const vol = volumes.find(v => selectedChapter >= v.chapter_range[0] && selectedChapter <= v.chapter_range[1])
-      if (vol) {
-        const volNodes = (vol as any).nodes || []
-        const curNode = volNodes.find((n: any) => {
-          const seg = n.chapter_segment || ''
-          const m = seg.match(/第?(\d+)[-–—至到]第?(\d+)/)
-          if (m) return selectedChapter >= parseInt(m[1]) && selectedChapter <= parseInt(m[2])
-          return false
-        })
-        if (curNode) {
-          extraConstraints += `\n📍 当前节点：${curNode.name}（${curNode.task}）`
-          if (curNode.node_forbidden) extraConstraints += `\n⛔ 节点禁区：${curNode.node_forbidden}`
-          if (curNode.emotion_limit) extraConstraints += `\n💕 感情限制：${curNode.emotion_limit}`
+    const { allFacts, timelineHistory, currentAbsoluteDay, stateDrift, narrativeMode, charNames, plan, chapNum } = ctx
+    const cleanText = stripViolationMarkers(editingContent)
+
+    // ── 分段修改模式 ──
+    if (mode === 'selected' && selectedParagraphs && selectedParagraphs.length > 0) {
+      try {
+        showToast('info', `正在修改 ${selectedParagraphs.length} 个段落...`)
+
+        // 构建分段改写 prompt
+        const sections = selectedParagraphs.map((p, i) =>
+          `[PARA_${p.index}] 原文：\n${p.text}\n\n请只输出修改后的段落文本（不要解释）：`
+        ).join('\n\n---\n\n')
+
+        const paraRewritePrompt = `你有 ${selectedParagraphs.length} 个段落需要修改。这些段落触发了以下违规规则：
+${lastCheckResult!.violations.filter(v => v.source !== 'ai_suggestion').map(v => `- ${v.detail}`).join('\n')}
+
+改写规则：
+1. 只改违规涉及的内容，保持其他部分完全不变
+2. 保持原文的风格、语调、人称、节奏
+3. 不要增加新的情节、设定、或信息
+4. 改写后必须比原文更保守
+
+${sections}
+
+重要：只输出修改后的段落文本，用 [PARA_END] 分隔。不要输出原文。不要任何解释。`
+
+        const rewritten = await window.electronAPI!.aiChat([
+          { role: 'system', content: '你是小说修改助手。按指令精准修改指定段落，只改违规部分。' },
+          { role: 'user', content: paraRewritePrompt },
+        ], '分段修改')
+
+        if (!rewritten || cancelledRef.current) { setFixingViolations(false); return }
+
+        // 解析 AI 返回的段落
+        const rewrittenParas = rewritten.split(/\[PARA_END\]/).map(p => p.trim()).filter(Boolean)
+        if (rewrittenParas.length === 0) {
+          showToast('info', 'AI 未返回修改结果，请重试全文修改')
+          setFixingViolations(false)
+          return
         }
+
+        // 将修改后的段落注入原文
+        const allParas = cleanText.split(/\n\n+/)
+        for (let i = 0; i < Math.min(selectedParagraphs.length, rewrittenParas.length); i++) {
+          const origIdx = selectedParagraphs[i].index
+          if (origIdx < allParas.length) {
+            allParas[origIdx] = rewrittenParas[i]
+          }
+        }
+        const newText = allParas.join('\n\n')
+
+        // 复查
+        const reCheck = checkChapter(
+          newText, plan, allFacts, timelineHistory,
+          currentAbsoluteDay, Number(id),
+          undefined, undefined, stateDrift, narrativeMode as any,
+        )
+
+        setEditingContent(newText)
+        await saveChapter(chapNum, plan.title, newText)
+        setTimeout(() => editorRef.current?.scrollTo(0, 0), 100)
+
+        if (reCheck.hardViolationCount === 0) {
+          setLastCheckResult(null)
+          setCheckedChapter(null)
+          showToast('success', '分段修改完成，违规已全部修复')
+        } else {
+          // 还有剩余违规，重新标记
+          const markers = buildViolationMarkers(reCheck.violations)
+          const markedText = markers ? markers + '\n' + newText : newText
+          setEditingContent(markedText)
+          await saveChapter(chapNum, plan.title, markedText)
+          setLastCheckResult({
+            violations: [...reCheck.violations],
+            concerns: [...reCheck.concerns],
+            hardViolationCount: reCheck.hardViolationCount,
+            leakScore: reCheck.leakScore,
+          })
+          setCheckedChapter(chapNum)
+          showToast('info', `修改完成，剩余 ${reCheck.hardViolationCount} 处违规已重新标记`)
+        }
+      } catch {
+        if (!cancelledRef.current) showToast('info', '分段修改失败，请重试全文修改')
+      }
+      setFixingViolations(false)
+      return
+    }
+
+    // ── 全文修改模式 ──
+    let activeText = cleanText
+    let rewriteCount = 0
+    const { maxRetries, entropyLimit } = DEFAULT_REWRITE_LIMIT
+    let snapshot = takeSnapshot(activeText, chapNum, charNames)
+    const checkResult: CheckResult = {
+      violations: [...lastCheckResult.violations],
+      concerns: [...lastCheckResult.concerns],
+      hardViolationCount: lastCheckResult.hardViolationCount,
+      leakScore: lastCheckResult.leakScore,
+    }
+
+    while (checkResult.hardViolationCount > 0 && rewriteCount <= maxRetries) {
+      if (cancelledRef.current) break
+
+      if (rewriteCount >= maxRetries) {
+        activeText = buildViolationMarkers(checkResult.violations) + '\n' + activeText
+        showToast('info', `修改${maxRetries}次仍未完全解决，已重新标记违规段落`)
+        break
       }
 
-      const reply = await window.electronAPI!.aiChat([
-        { role: 'system', content: CONTINUE_SYSTEM },
-        { role: 'user', content: CONTINUE_USER(
-          editingContent, plan?.plot_beats, (plan as any)?.emotional_arc,
-          styleContext, personalityContext
-        ) + extraConstraints },
-      ], '续写')
-      if (cancelledRef.current) return
-      const newContent = editingContent + '\n\n' + (reply || '')
-      setEditingContent(newContent)
-      const planTitle = plan?.title || `第${selectedChapter}章`
-      await saveChapter(selectedChapter, planTitle, newContent)
-      showToast('success', '续写完成')
-    } catch (e: any) {
-      if (!cancelledRef.current) showToast('error', '续写失败：' + (e.message || '未知错误'))
-    } finally { setContinuing(false) }
+      showToast('info', `正在修改违规 (${rewriteCount + 1}/${maxRetries})...`)
+
+      try {
+        const rewritePrompt = buildRewritePrompt(activeText, checkResult.violations, snapshot)
+        const rewriteMsg = [
+          { role: 'system' as const, content: '你是小说修改助手。按指令精准修改文本，只改违规部分。' },
+          { role: 'user' as const, content: `原文：\n${activeText.slice(0, 6000)}\n\n${rewritePrompt}` },
+        ]
+        const rewritten = await window.electronAPI!.aiChat(rewriteMsg, '违规修改')
+
+        if (!rewritten || cancelledRef.current) break
+
+        if (rewritten.trim() === activeText.trim()) {
+          activeText = buildViolationMarkers(checkResult.violations) + '\n' + activeText
+          showToast('info', 'AI 未修改文本，请手动处理标记的违规段落')
+          break
+        }
+
+        const diff = diffSnapshot(snapshot, rewritten, charNames)
+        if (!diff.isStable || diff.semanticChangeRatio > 0.35) {
+          activeText = buildViolationMarkers(checkResult.violations) + '\n' + activeText
+          showToast('info', `修改语义漂移过大（${Math.round(diff.semanticChangeRatio * 100)}%），保留原文`)
+          break
+        }
+
+        const infoLoss = calcInfoLoss(activeText, rewritten)
+        if (infoLoss > entropyLimit) {
+          activeText = buildViolationMarkers(checkResult.violations) + '\n' + activeText
+          showToast('info', `修改信息损失 ${Math.round(infoLoss * 100)}% 超限，保留原文`)
+          break
+        }
+
+        const reCheck = checkChapter(
+          rewritten, plan, allFacts, timelineHistory,
+          currentAbsoluteDay, Number(id),
+          undefined, undefined, stateDrift, narrativeMode as any,
+        )
+
+        if (reCheck.hardViolationCount === 0) {
+          activeText = rewritten
+          setEditingContent(rewritten)
+          await saveChapter(chapNum, plan.title, rewritten)
+          setLastCheckResult(null)
+          setCheckedChapter(null)
+          showToast('success', '违规已全部修复')
+          break
+        }
+
+        activeText = rewritten
+        snapshot = takeSnapshot(rewritten, chapNum, charNames)
+        checkResult.violations = reCheck.violations
+        checkResult.hardViolationCount = reCheck.hardViolationCount
+        if (reCheck.leakScore) checkResult.leakScore = reCheck.leakScore
+        rewriteCount++
+      } catch {
+        activeText = buildViolationMarkers(checkResult.violations) + '\n' + activeText
+        showToast('info', '修改调用失败，请手动处理标记的违规段落')
+        break
+      }
+    }
+
+    // 保存修改后的文本
+    if (activeText !== cleanText) {
+      setEditingContent(activeText)
+      await saveChapter(chapNum, plan.title, activeText)
+      setTimeout(() => editorRef.current?.scrollTo(0, 0), 100)
+    }
+
+    // 更新 checker 状态（必须新对象，否则 React 不重渲染）
+    if (checkResult.hardViolationCount > 0) {
+      setLastCheckResult({
+        violations: [...checkResult.violations],
+        concerns: [...checkResult.concerns],
+        hardViolationCount: checkResult.hardViolationCount,
+        leakScore: checkResult.leakScore,
+      })
+      setCheckedChapter(chapNum)
+    }
+
+    setFixingViolations(false)
   }
 
+  /** 续写 */
   /** 编辑器选中文字 → 弹出禁用按钮（鼠标） */
   const handleTextSelect = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget
@@ -2181,6 +2160,7 @@ export default function Workspace() {
 
   if (!loaded) return <div className="flex justify-center py-24 text-text-secondary">加载中...</div>
   if (!project) return null
+  genChapterRef.current = genChapter  // 始终保持指向最新闭包
 
   return (
     <div className="flex h-full">
@@ -2214,7 +2194,7 @@ export default function Workspace() {
             onClick={addChapter}
             className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-secondary flex items-center gap-1.5 border-b border-border mb-1"
           >
-            <span>＋</span>
+            <span>+</span>
             <span>新建章</span>
           </button>
 
@@ -2239,7 +2219,7 @@ export default function Workspace() {
                   className="px-1.5 text-xs text-text-placeholder hover:text-danger transition-colors shrink-0"
                   title="删除"
                 >
-                  🗑
+                  x
                 </button>
               </div>
             ))
@@ -2270,40 +2250,174 @@ export default function Workspace() {
                 <span className="px-3 py-1.5 text-xs text-warning flex items-center gap-1">
                   <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" /> {genTarget || '生成中...'}
                 </span>
-                <button onClick={() => handleCancel()} className="px-2 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">⏹ 取消</button>
+                <button onClick={() => handleCancel()} className="px-2 py-1 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">取消</button>
               </div>
             ) : (
-              <button onClick={() => setShowGenPanel(showGenPanel === 'chapter' ? null : 'chapter')}
-                className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
-                {editingContent ? '🔄 重新生成' : '🤖 生成本章'}
-              </button>
-            )}
-            {editingContent && (
               <>
-                <button onClick={() => { loadHistory('chapter', String(selectedChapter)); setHistoryModal({ type: 'chapter', key: String(selectedChapter), currentContent: editingContent }) }}
-                  className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">
-                  📜
+                <button onClick={() => setShowGenPanel(showGenPanel === 'chapter' ? null : 'chapter')}
+                  className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover">
+                  {editingContent ? '重新生成' : '生成本章'}
                 </button>
-                {continuing ? (
-                  <button onClick={cancelOperation}
-                    className="px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10">
-                    ⏹ 取消
-                  </button>
-                ) : (
-                  <button onClick={handleContinue} disabled={generating}
-                    className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary disabled:opacity-50">
-                    ✏️ 续写
-                  </button>
+                {/* v3.0: 自动续写 — 点击弹出输入框 */}
+                <button
+                  onClick={() => {
+                    const defaultEnd = queueEndChapter > 0 ? queueEndChapter
+                      : (chapterPlans[chapterPlans.length - 1]?.chapter_number || selectedChapter)
+                    setAutoContinueStart(String(selectedChapter))
+                    setAutoContinueInput(String(defaultEnd))
+                    setAutoContinueDialog(true)
+                  }}
+                  className="px-2.5 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary hover:border-primary/30"
+                  title="点击设置自动续写范围"
+                >
+                  自动续写
+                </button>
+                {/* auto-continue inline dialog */}
+                {autoContinueDialog && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setAutoContinueDialog(false)}>
+                    <div className="bg-white rounded-card border shadow-lg p-4 w-72" onClick={e => e.stopPropagation()}>
+                      <div className="text-sm font-medium mb-3">自动续写设置</div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs text-text-secondary shrink-0">起始章</span>
+                        <input
+                          type="number"
+                          value={autoContinueStart}
+                          onChange={e => setAutoContinueStart(e.target.value)}
+                          min={1}
+                          max={999}
+                          className="w-full text-sm border border-border-input rounded px-2 py-1"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-xs text-text-secondary shrink-0">终止章</span>
+                        <input
+                          type="number"
+                          value={autoContinueInput}
+                          onChange={e => setAutoContinueInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                          min={1}
+                          max={999}
+                          autoFocus
+                          className="w-full text-sm border border-border-input rounded px-2 py-1"
+                          placeholder={`默认 ${chapterPlans[chapterPlans.length - 1]?.chapter_number || selectedChapter}`}
+                        />
+                      </div>
+                      <label className="flex items-center gap-1.5 text-xs text-text-secondary mb-3 cursor-pointer">
+                        <input type="checkbox" checked={stopOnPlotDeviation} onChange={e => setStopOnPlotDeviation(e.target.checked)} className="accent-danger" />
+                        剧情严重跑偏时暂停生成
+                      </label>
+                      {/* 风格库选择 */}
+                      {styleLibraries.length > 0 && (
+                        <div className="mb-2">
+                          <span className="text-xs text-text-secondary block mb-1">风格库</span>
+                          <select value={String(primaryStyleId ?? '')} onChange={e => {
+                            const v = e.target.value
+                            setPrimaryStyleId(v ? Number(v) : null)
+                          }}
+                            className="w-full text-xs border border-border-input rounded px-2 py-1 bg-white">
+                            <option value="">不使用</option>
+                            {styleLibraries.map(lib => (
+                              <option key={lib.id} value={String(lib.id)}>{lib.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {/* 人格库选择 */}
+                      {personalityProjects.length > 0 && (
+                        <div className="mb-3">
+                          <span className="text-xs text-text-secondary block mb-1">人格库</span>
+                          <select value={String(primaryPersonalityId ?? '')} onChange={e => {
+                            const v = e.target.value
+                            setPrimaryPersonalityId(v ? Number(v) : null)
+                          }}
+                            className="w-full text-xs border border-border-input rounded px-2 py-1 bg-white">
+                            <option value="">不使用</option>
+                            {personalityProjects.map(p => (
+                              <option key={p.id} value={String(p.id)}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => {
+                            autoContinueRef.current = false
+                            setQueueEndChapter(0)
+                            setAutoContinueDialog(false)
+                            showToast('info', '自动续写已停止')
+                          }}
+                          className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
+                        >停止续写</button>
+                        <button
+                          onClick={() => setAutoContinueDialog(false)}
+                          className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary"
+                        >取消</button>
+                        <button
+                          onClick={async () => {
+                            const startCh = parseInt(autoContinueStart)
+                            const endCh = parseInt(autoContinueInput)
+                            if (isNaN(startCh) || startCh < 1) { showToast('error', '请输入有效的起始章节'); return }
+                            if (isNaN(endCh) || endCh < startCh) { showToast('error', '终止章必须大于等于起始章'); return }
+                            setAutoContinueDialog(false)
+                            setQueueEndChapter(endCh)
+                            autoContinueRef.current = true
+                            showToast('info', `自动续写：第${startCh}章 → 第${endCh}章（点「取消」可随时中断）`)
+
+                            let curVol = volumes.find(v => startCh >= v.chapter_range[0] && startCh <= v.chapter_range[1])
+                            if (!curVol) {
+                              showToast('info', `正在生成第${volumes.length + 1}卷卷纲...`)
+                              await genSingleVolume()
+                              if (!autoContinueRef.current) return
+                            }
+                            let plan = chapterPlans.find(p => p.chapter_number === startCh)
+                            if (!plan) {
+                              try {
+                                const row = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+                                if (row?.chapters) plan = JSON.parse(row.chapters).find((p: any) => p.chapter_number === startCh)
+                              } catch {}
+                            }
+                            if (!plan) {
+                              showToast('info', `正在生成第${startCh}章细纲...`)
+                              await genSingleChapterPlan(startCh)
+                              if (!autoContinueRef.current) return
+                              try {
+                                const row = await window.electronAPI!.db.get('SELECT chapters FROM detailed_outlines WHERE project_id = ?', [Number(id)])
+                                if (row?.chapters) plan = JSON.parse(row.chapters).find((p: any) => p.chapter_number === startCh)
+                              } catch {}
+                              if (!plan) {
+                                showToast('error', `第${startCh}章细纲生成后未找到记录`)
+                                return
+                              }
+                            }
+                            genChapterRef.current(startCh)
+                          }}
+                          className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover"
+                        >开始</button>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </>
             )}
+            {editingContent && (
+              <button onClick={() => { loadHistory('chapter', String(selectedChapter)); setHistoryModal({ type: 'chapter', key: String(selectedChapter), currentContent: editingContent }) }}
+                className="px-3 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">
+                版本
+              </button>
+            )}
             <button onClick={handleSave} disabled={saving}
               className="px-3 py-1.5 text-xs border border-primary text-primary rounded-btn hover:bg-primary-light disabled:opacity-50">
-              {saving ? '...' : '💾'}
+              {saving ? '...' : '保存'}
             </button>
+            {editingContent && (
+              <button onClick={optimizeChapter} disabled={optimizing || !editingContent.trim()}
+                className="px-3 py-1.5 text-xs bg-success text-white rounded-btn hover:bg-success/80 disabled:opacity-50" title="禁词扫描->去AI味->Checker->修复->更新事实簿">
+                {optimizing ? '...' : '优化'}
+              </button>
+            )}
             <div className="relative">
               <button onClick={() => setShowExport(!showExport)}
-                className="px-2.5 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">📥</button>
+                className="px-2.5 py-1.5 text-xs border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary">导出</button>
               {showExport && (
                 <div className="absolute right-0 top-full mt-1 bg-white rounded-card border shadow-lg z-20 w-28">
                   {(['txt','docx','md'] as const).map(f => (
@@ -2350,6 +2464,14 @@ export default function Workspace() {
                     {plan.cool_moment && <div><span className="text-text-placeholder">爽点：</span>{plan.cool_moment}</div>}
                     {plan.opening_hook && <div><span className="text-text-placeholder">章首钩子：</span>{plan.opening_hook.type} · {plan.opening_hook.detail}</div>}
                     {plan.closing_hook && <div><span className="text-text-placeholder">章尾钩子：</span>{plan.closing_hook.type}（期待度：{plan.closing_hook.impact}）</div>}
+                    {plan.forbidden && plan.forbidden.length > 0 && (
+                      <div><span className="text-text-placeholder">⛔ 禁区：</span>
+                        {plan.forbidden.map((f: string, i: number) => <span key={i} className="text-danger">{i > 0 ? ' | ' : ''}{f}</span>)}
+                      </div>
+                    )}
+                    {plan.scene_count && <div><span className="text-text-placeholder">🎬 场景数：</span>{plan.scene_count}个</div>}
+                    {plan.emotion_cap && <div><span className="text-text-placeholder">💕 感情上限：</span>{plan.emotion_cap}</div>}
+                    {plan.max_info_reveal && <div><span className="text-text-placeholder">🔐 信息上限：</span>{plan.max_info_reveal}</div>}
                   </div>
                 )}
               </div>
@@ -2362,7 +2484,7 @@ export default function Workspace() {
           <div className="mx-4 mt-2 bg-white rounded-card border border-primary/30 shadow-sm p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-text-main">
-                🤖 生成{showGenPanel === 'outline' ? '大纲' : showGenPanel === 'volumes' ? '卷纲' : '章节'} — 选择参考
+                🤖 生成{showGenPanel === 'outline' ? '大纲' : showGenPanel === 'volumes' ? '卷纲' : showGenPanel === 'detail' ? '细纲' : '章节'} — 选择参考
               </span>
               <button onClick={() => setShowGenPanel(null)} className="text-text-placeholder hover:text-text-main">✕</button>
             </div>
@@ -2440,8 +2562,14 @@ export default function Workspace() {
                   </div>
                   <div className="flex-1">
                     <h4 className="text-xs font-medium text-text-main mb-1">🧠 人格库</h4>
-                    {personalityProjects.filter(p => !!((p.personality_data as any)?.private_imagery || (p.personality_data as any)?.emotional_quirks)).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
-                      personalityProjects.filter(p => !!((p.personality_data as any)?.private_imagery || (p.personality_data as any)?.emotional_quirks)).map(p => {
+                    {personalityProjects.filter(p => {
+                      const d = p.personality_data as any
+                      return !!(d?.emotion || d?.imagery || d?.dialogue || d?.private_imagery || d?.emotional_quirks)
+                    }).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
+                      personalityProjects.filter(p => {
+                        const d = p.personality_data as any
+                        return !!(d?.emotion || d?.imagery || d?.dialogue || d?.private_imagery || d?.emotional_quirks)
+                      }).map(p => {
                         const isPrimary = primaryPersonalityId === p.id
                         return (
                         <div key={p.id} className="flex items-center gap-1.5 text-xs py-0.5">
@@ -2509,6 +2637,9 @@ export default function Workspace() {
               }}
               styleContext={buildStyleContext(primaryStyleId, auxStyleIds, styleLibraries)}
               personalityContext={buildPersonalityContext(primaryPersonalityId, auxPersonalityIds, personalityProjects)}
+              forbiddenContext={(chapterPlans.find(p => p.chapter_number === selectedChapter)?.forbidden || []).join('；')}
+              projectId={Number(id)}
+              chapterNum={selectedChapter}
               onMarksChange={(scores, selected) => setMarkData({ scores, selected })}
             />
           </div>
@@ -2577,7 +2708,39 @@ export default function Workspace() {
                   </button>
                 </div>
               )}
+              {/* 违规横幅 */}
+              {lastCheckResult && lastCheckResult.hardViolationCount > 0 && checkedChapter === selectedChapter && (
+                <div className="mb-2 px-4 py-2.5 bg-warning/10 border border-warning/30 rounded-btn flex items-start gap-2">
+                  <span className="text-base shrink-0">⚠️</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-text-main font-medium">
+                      硬违规 ({lastCheckResult.hardViolationCount} 处) — 已标记在正文顶部
+                    </p>
+                    <p className="text-xs text-text-secondary mt-0.5">
+                      {lastCheckResult.violations.filter(v => v.source !== 'ai_suggestion').slice(0, 3).map((v, i) => (
+                        <span key={i} className="block mt-0.5 text-text-placeholder truncate">· {v.detail}</span>
+                      ))}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {fixingViolations ? (
+                      <button onClick={cancelOperation}
+                        className="px-3 py-1.5 text-xs border border-danger text-danger rounded-btn hover:bg-danger/10 whitespace-nowrap">
+                        ⏹ 取消修改
+                      </button>
+                    ) : (
+                      <button onClick={() => handleFixViolations('full')}
+                        className="px-3 py-1.5 text-xs bg-primary text-white rounded-btn hover:bg-primary-hover whitespace-nowrap">
+                        🔧 修改违规
+                      </button>
+                    )}
+                    <button onClick={() => { setCheckedChapter(null); setLastCheckResult(null) }}
+                      className="text-xs text-text-placeholder hover:text-text-secondary shrink-0">✕</button>
+                  </div>
+                </div>
+              )}
               <textarea
+                ref={editorRef}
                 value={editingContent}
                 onChange={(e) => setEditingContent(e.target.value)}
                 onMouseUp={handleTextSelect}
@@ -2638,15 +2801,14 @@ export default function Workspace() {
             className="text-xs text-text-placeholder hover:text-text-main shrink-0 w-6 h-6 flex items-center justify-center"
             title={rightCollapsed ? '展开面板' : '折叠面板'}
           >{rightCollapsed ? '◀' : '▶'}</button>
-          {!rightCollapsed && (['outline', 'volumes', 'settings', 'foreshadowing', 'timeline', 'review'] as const).map(tab => (
+          {!rightCollapsed && (['outline', 'volumes', 'facts', 'review'] as const).map(tab => (
             <button key={tab}
               onClick={() => setRightTab(tab)}
               className={`flex-1 py-1 text-xs tracking-wide transition-colors text-center whitespace-nowrap
                 ${rightTab === tab ? 'text-primary font-semibold' : 'text-text-secondary hover:text-text-main font-normal'}
               `}>
               <span className="relative inline-block pb-1">
-                {{ outline: '大纲', volumes: '细纲', settings: '设定',
-                   foreshadowing: '伏笔', timeline: '时间线', review: '校对' }[tab]}
+                {{ outline: '大纲', volumes: '细纲', facts: '设计台', review: '检查' }[tab]}
                 {rightTab === tab && (
                   <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
                 )}
@@ -2671,7 +2833,7 @@ export default function Workspace() {
                       className="text-xs text-text-secondary hover:underline">查看</button>
                   )}
                   <button onClick={() => setShowGenPanel(showGenPanel === 'outline' ? null : 'outline')} disabled={generating}
-                    className="text-xs text-primary hover:underline disabled:opacity-50">🔄 重新生成</button>
+                    className="text-xs text-primary hover:underline disabled:opacity-50">重新生成</button>
                 </div>
               </div>
               {outlineContent ? (
@@ -2741,6 +2903,7 @@ export default function Workspace() {
               generating={generating} outlineContent={outlineContent}
               outlineVersion={outlineVersion}
               showGenPanel={showGenPanel} setShowGenPanel={setShowGenPanel}
+              setGenDetailTarget={setGenDetailTarget}
               dragChapter={dragChapter} setDragChapter={setDragChapter}
               selectedChapter={selectedChapter}
               addVolume={addVolume} deleteVolume={deleteVolume}
@@ -2753,44 +2916,20 @@ export default function Workspace() {
             />
           )}
 
-          {/* 设定 Tab（统一管理角色/世界/规则等） */}
-          {rightTab === 'settings' && (
-            <CanonFactPanel
+          {/* 设计台 Tab（设定/角色跟踪/事件跟踪/伏笔） */}
+          {rightTab === 'facts' && (
+            <DesignPanel
               projectId={Number(id)}
               outlineContent={outlineContent}
               chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title, content: c.content }))}
-              key={canonRefresh}
+              volumes={volumes}
+              refreshKey={canonRefresh}
             />
           )}
 
-          {/* 伏笔 Tab */}
-          {rightTab === 'foreshadowing' && (
-            <ForeshadowingPanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} />
-          )}
-
-          {/* 时间线 Tab */}
-          {rightTab === 'timeline' && (
-            <TimelinePanel projectId={Number(id)} chapters={chapters.map(c => ({ chapter_number: c.chapter_number, title: c.title }))} volumes={volumes} />
-          )}
-
-          {/* 叙事控制台 Tab */}
+          {/* 检查 Tab */}
           {rightTab === 'review' && (
-            <ReviewPanel
-              lastCheckResult={lastCheckResult}
-              lastLeakScore={lastLeakScore}
-              lastEventData={lastEventData}
-              calibrationStats={calibrationStats}
-              narrativeReport={narrativeReport}
-              narrativeReportLoading={narrativeReportLoading}
-              onGenerateReport={handleNarrativeReport}
-              onCancel={handleCancel}
-              chapters={chapters}
-              foreshadowingItems={[]}
-              currentChapter={selectedChapter}
-              fixingChapter={fixingChapter}
-              autoFixChapter={autoFixChapter}
-              onInjectHint={handleInjectHint}
-            />
+            <CheckReportPanel projectId={Number(id)} volumes={volumes} refreshKey={canonRefresh} />
           )}
 
           {/* 自动修改预览弹窗 */}
@@ -2861,6 +3000,27 @@ export default function Workspace() {
                       <input type="checkbox" checked={auxDissIds.includes(d.id)}
                         onChange={() => setAuxDissIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])} className="accent-primary" />
                       <span>{d.name}</span>
+                    </label>
+                  ))}
+              </div>
+              <div>
+                <h4 className="text-xs font-medium text-text-main mb-1.5">🧠 人格库</h4>
+                {personalityProjects.filter(p => {
+                  const d = p.personality_data as any
+                  return !!(d?.emotion || d?.imagery || d?.dialogue || d?.private_imagery || d?.emotional_quirks)
+                }).length === 0 ? <p className="text-xs text-text-placeholder">暂无可用的</p> :
+                  personalityProjects.filter(p => {
+                    const d = p.personality_data as any
+                    return !!(d?.emotion || d?.imagery || d?.dialogue || d?.private_imagery || d?.emotional_quirks)
+                  }).map(p => (
+                    <label key={p.id} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">
+                      <input type="radio" name="cfgPrimaryPersonality" checked={primaryPersonalityId === p.id}
+                        onChange={() => setPrimaryPersonalityId(primaryPersonalityId === p.id ? null : p.id)} className="accent-primary" />
+                      <span className="flex-1">{p.name}</span>
+                      <input type="checkbox" checked={auxPersonalityIds.includes(p.id)}
+                        onChange={() => setAuxPersonalityIds(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])}
+                        disabled={primaryPersonalityId === p.id} className="accent-primary" />
+                      <span className="text-text-placeholder w-10">辅</span>
                     </label>
                   ))}
               </div>

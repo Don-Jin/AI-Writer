@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { showToast } from '../common/Toast'
-import ReferenceSelector, { buildReferenceContext } from '../common/ReferenceSelector'
+import ReferenceSelector from '../common/ReferenceSelector'
 import ChapterList from './ChapterList'
 import {
   CHAPTER_SYSTEM, CHAPTER_USER,
+  buildExecutionConstraints,
   CONTEXT_UPDATE_SYSTEM, CONTEXT_UPDATE_USER,
 } from '../../services/generator'
 import { exportToTxt, exportToDocx } from '../../services/export'
 import DeslopPanel from './DeslopPanel'
-import type { NovelProject, ChapterPlan, Chapter, StyleLibrary } from '../../types'
+import type { NovelProject, ChapterPlan, Chapter, StyleLibrary, PersonalityProject } from '../../types'
 import type { DisassemblyProject } from '../../store/disassemblyStore'
+import * as trackerService from '../../services/trackerService'
 
 export default function ChapterEditor() {
   const { id } = useParams<{ id: string }>()
@@ -31,9 +33,10 @@ export default function ChapterEditor() {
 
   const [primaryStyleId, setPrimaryStyleId] = useState<number | null>(null)
   const [auxiliaryStyleIds, setAuxiliaryStyleIds] = useState<number[]>([])
-  const [disassemblyIds, setDisassemblyIds] = useState<number[]>([])
+  const [primaryPersonalityId, setPrimaryPersonalityId] = useState<number | null>(null)
+  const [auxPersonalityIds, setAuxPersonalityIds] = useState<number[]>([])
   const [styleLibraries, setStyleLibraries] = useState<StyleLibrary[]>([])
-  const [disassemblies, setDisassemblies] = useState<DisassemblyProject[]>([])
+  const [personalityProjects, setPersonalityProjects] = useState<PersonalityProject[]>([])
 
   const loadAll = useCallback(async () => {
     try {
@@ -56,8 +59,8 @@ export default function ChapterEditor() {
 
       const libs = await window.electronAPI.db.query('SELECT * FROM style_libraries ORDER BY created_at DESC')
       setStyleLibraries(libs.map((l: any) => ({ ...l, style_profile: typeof l.style_profile === 'string' ? JSON.parse(l.style_profile) : l.style_profile })))
-      const diss = await window.electronAPI.db.query('SELECT * FROM disassembly_projects ORDER BY updated_at DESC')
-      setDisassemblies(diss)
+      const pers = await window.electronAPI.db.query('SELECT * FROM personality_projects ORDER BY updated_at DESC')
+      setPersonalityProjects(pers.map((p: any) => ({ ...p, personality_data: typeof p.personality_data === 'string' ? JSON.parse(p.personality_data || '{}') : (p.personality_data || {}) })))
     } catch { showToast('error', '加载失败') }
     setLoaded(true)
   }, [id])
@@ -124,6 +127,145 @@ export default function ChapterEditor() {
     } catch { /* 上下文更新失败不阻塞 */ }
   }
 
+  // ── 构建风格上下文（与 Workspace 一致） ──
+  function extractItems(text: string | undefined, maxItems: number): string[] {
+    if (!text || text.length < 5) return []
+    const items = text.split(/[。；\n]+/).map(s => s.trim()).filter(s => s.length > 3)
+    return items.slice(0, maxItems)
+  }
+
+  function buildStyleContext(): string {
+    const ids = [primaryStyleId, ...auxiliaryStyleIds].filter(Boolean) as number[]
+    const styles = styleLibraries.filter(l => ids.includes(l.id))
+    if (!styles.length) return ''
+    return styles.map((s) => {
+      const p = s.style_profile as any
+      const prefix = `【🎨 风格材料池——${s.id === primaryStyleId ? '主' : '辅'}】${s.name}`
+
+      // V4 格式：22类替换指南
+      if (p?.replacements) {
+        const r = p.replacements
+        const lines: string[] = [prefix]
+        const keys = ['心理', '表情', '动作', '对话', '比喻', '结尾', '解释', '评判', '句子', '句式', '副词', '煽情', '描写', '连接词', '猜测', '过渡', '总结', '收束', '泛化', '成语', '预告']
+        let count = 0
+        for (const k of keys) {
+          const dim = r[k]
+          if (!dim || count >= 8) continue
+          count++
+          lines.push(`\n【${k}】`)
+          if (dim.ai_uses?.length) lines.push(`❌ AI会用：${dim.ai_uses.join('、')}`)
+          if (dim.human_uses?.length) lines.push(`✅ 人类写法：${dim.human_uses.slice(0, 2).map((u: string) => `"${u}"`).join(' / ')}`)
+          if (dim.rule) lines.push(`📏 规则：${dim.rule}`)
+        }
+        return lines.join('\n')
+      }
+
+      // V3 旧格式回退
+      const n = p?.narrative; const rh = p?.sentence_rhythm
+      const pg = p?.paragraph; const l = p?.language; const a = p?.atmosphere
+      const hard: string[] = []; const soft: string[] = []; const style: string[] = []
+
+      if (n?.perspective) hard.push(`- 使用「${n.perspective}」。禁止切换视角。`)
+      if (n?.pov_rules) hard.push(`- ${n.pov_rules}`)
+      if (pg?.forbidden) hard.push(`- 禁止：${pg.forbidden}`)
+      if (l?.forbidden_words) {
+        const words = l.forbidden_words.split(/[,，、\s]+/).filter((w: string) => w.length > 1)
+        if (words.length > 0) hard.push(`- 禁用词汇（出现即违规）：${words.slice(0, 20).join('、')}`)
+      }
+      if (rh && typeof rh === 'object') {
+        if (rh.short_max) soft.push(`- 短句≤${rh.short_max}字`)
+        if (rh.long_min) soft.push(`- 长句≥${rh.long_min}字`)
+        if (rh.density) soft.push(`- 句式密度：${rh.density}`)
+        if (rh.exception) soft.push(`- 例外：${rh.exception}`)
+      } else if (typeof rh === 'string' && rh.length > 2) {
+        soft.push(`- 句式：${rh}`)
+      } else {
+        const ws = p?.writing_style
+        if (ws?.sentence_characteristics) soft.push(`- 句式：${ws.sentence_characteristics}`)
+      }
+      if (l?.vocab_level) soft.push(`- 词汇层级：${l.vocab_level}`)
+      if (l?.dialogue_vs_narrative) soft.push(`- 叙事vs对话：${l.dialogue_vs_narrative}`)
+      if (a?.emotion_scale) soft.push(`- 情绪跨度：${a.emotion_scale}`)
+      if (a?.level_triggers) soft.push(`- 升档触发：${a.level_triggers}`)
+      if (a?.must_downgrade) soft.push(`- 必须降档场景：${a.must_downgrade}`)
+      if (pg?.habit) soft.push(`- 段落习惯：${pg.habit}`)
+      if (pg?.by_scene_type) soft.push(`- 场景段落：${pg.by_scene_type}`)
+
+      if (n?.narrator_intrusion) style.push(`- 叙事者行为：${n.narrator_intrusion}`)
+      if (a?.tone) style.push(`- 氛围：${a.tone}`)
+      else if (a?.primary) style.push(`- 氛围：${a.primary}`)
+      if (!hard.length && !soft.length) {
+        const ws = p?.writing_style; const lf = p?.language_features
+        if (ws?.narrative_perspective) hard.push(`- 使用「${ws.narrative_perspective}」`)
+        if (ws?.pace) soft.push(`- 节奏：${ws.pace}`)
+        if (lf?.vocabulary_preference) soft.push(`- 词汇：${lf.vocabulary_preference}`)
+        if (ws?.paragraph_ratio) soft.push(`- 段落：${ws.paragraph_ratio}`)
+      }
+
+      const sections: string[] = [prefix]
+      if (hard.length) sections.push(`🔴 必须遵守（${Math.min(hard.length, 7)}条）：\n${hard.slice(0, 7).join('\n')}`)
+      if (soft.length) sections.push(`🟡 优先遵守（${Math.min(soft.length, 12)}条）：\n${soft.slice(0, 12).join('\n')}`)
+      if (style.length) sections.push(`🔵 风格漂移（${Math.min(style.length, 15)}条）：\n${style.slice(0, 15).join('\n')}`)
+      return sections.join('\n\n')
+    }).join('\n')
+  }
+
+  function buildPersonalityContext(): string {
+    const ids = [primaryPersonalityId, ...auxPersonalityIds].filter(Boolean) as number[]
+    const projects = personalityProjects.filter(p => ids.includes(p.id))
+    if (!projects.length) return ''
+    return projects.map(p => {
+      const d = p.personality_data || {} as any
+      const prefix = `【🧠 人格材料池——${p.id === primaryPersonalityId ? '主' : '辅'}】${p.name}`
+
+      // V2 新格式：5核替换器
+      if (d?.emotion || d?.imagery || d?.dialogue) {
+        const lines: string[] = [prefix]
+        const addReplacer = (title: string, obj: any) => {
+          const sub: string[] = []
+          for (const [label, dim] of Object.entries(obj) as any) {
+            if (!dim?.author_uses?.length) continue
+            sub.push(`  ${label}: ❌${(dim.ai_defaults||[]).join('、')} → ✅${dim.author_uses.join('、')}`)
+            if (dim.principle) sub.push(`    📏 ${dim.principle}`)
+          }
+          if (sub.length) lines.push(`【${title}】\n${sub.join('\n')}`)
+        }
+        if (d.emotion) addReplacer('情绪替换器', d.emotion)
+        if (d.imagery) addReplacer('意象替换器', d.imagery)
+        if (d.dialogue) addReplacer('对话替换器', d.dialogue)
+        if (d.rhythm) addReplacer('节奏替换器', d.rhythm)
+        if (d.observation) addReplacer('观察替换器', d.observation)
+        if (d.style_profile?.global_pattern) lines.push(`【全局模式】${d.style_profile.global_pattern}`)
+        return lines.join('\n')
+      }
+
+      // V1 旧格式回退
+      const soft: string[] = []; const style: string[] = []
+      const imgs = extractItems(d.private_imagery, 8)
+      if (imgs.length) soft.push(`- 私人意象（只能用以下，禁止训练数据套路意象）：\n${imgs.map(i => `  · ${i}`).join('\n')}`)
+      const quirks = extractItems(d.emotional_quirks, 5)
+      if (quirks.length) soft.push(`- 情绪怪癖（极端情绪下只能这样反应）：\n${quirks.map(q => `  · ${q}`).join('\n')}`)
+      const rhetorics = extractItems(d.private_rhetoric, 5)
+      if (rhetorics.length) soft.push(`- 私人修辞（比喻必须从以下生长）：\n${rhetorics.map(r => `  · ${r}`).join('\n')}`)
+      const dialogue = extractItems(d.dialogue_fingerprint, 6)
+      if (dialogue.length) soft.push(`- 对话指纹：\n${dialogue.map(dl => `  · ${dl}`).join('\n')}`)
+      const scenery = extractItems(d.scenery_fingerprint, 5)
+      if (scenery.length) soft.push(`- 风景指纹：\n${scenery.map(sc => `  · ${sc}`).join('\n')}`)
+      const rhythm = extractItems(d.rhythm_fingerprint, 5)
+      if (rhythm.length) style.push(`- 节奏指纹：\n${rhythm.map(r => `  · ${r}`).join('\n')}`)
+      const nonsense = extractItems(d.nonsense_style, 4)
+      if (nonsense.length) style.push(`- 废话风格：\n${nonsense.map(n => `  · ${n}`).join('\n')}`)
+      const narration = extractItems(d.narrative_distance, 4)
+      if (narration.length) style.push(`- 叙事距离：\n${narration.map(nr => `  · ${nr}`).join('\n')}`)
+      const infoRelease = extractItems(d.info_release, 4)
+      if (infoRelease.length) style.push(`- 信息释放：\n${infoRelease.map(ir => `  · ${ir}`).join('\n')}`)
+      const sections: string[] = [prefix]
+      if (soft.length) sections.push(`🟡 优先遵守（${soft.length}条）：\n${soft.join('\n')}`)
+      if (style.length) sections.push(`🔵 风格漂移（${style.length}条）：\n${style.join('\n')}`)
+      return sections.join('\n\n')
+    }).join('\n')
+  }
+
   const handleGenerate = async () => {
     if (!project) return
     const plan = chapterPlans.find(p => p.chapter_number === currentChapter)
@@ -131,16 +273,16 @@ export default function ChapterEditor() {
 
     setGenerating(true)
     try {
-      const { styleContext, disassemblyContext } = buildReferenceContext(primaryStyleId, auxiliaryStyleIds, disassemblyIds, styleLibraries, disassemblies)
-      const styleDesc = styleContext || '无特殊要求，保持流畅自然的中文写作'
+      const styleContext = buildStyleContext()
+      const personalityContext = buildPersonalityContext()
 
       const prevChapter = chapters.find(c => c.chapter_number === currentChapter - 1)
-      const prevExcerpt = prevChapter?.content?.slice(-300) || ''
+      const prevExcerpt = prevChapter?.content?.slice(-800) || ''
 
       let outlineSummary = ''
       try {
         const outline = await window.electronAPI.db.get('SELECT content FROM outlines WHERE project_id = ?', [Number(id)])
-        outlineSummary = outline?.content?.slice(0, 1000) || project.description || ''
+        outlineSummary = outline?.content?.slice(0, 500) || project.description || ''
       } catch { outlineSummary = project.description || '' }
 
       let characterState = '{}'
@@ -149,22 +291,35 @@ export default function ChapterEditor() {
         if (ctx) characterState = ctx.character_state
       } catch {}
 
+      // v4.0: 硬规则从 story_tracker 读取
+      let canonFactsContext = ''
+      try {
+        const masterItems = await trackerService.getMasterTracker(Number(id))
+        const hardRules = masterItems.filter((t: any) => t.tracker_type === 'rules' || t.tracker_type === 'character')
+        if (hardRules.length > 0) {
+          canonFactsContext = hardRules.map((t: any) =>
+            `- [${t.tracker_type}] ${t.tracker_key}: ${t.summary}`
+          ).join('\n')
+        }
+      } catch {}
+
       const planAny = plan as any
-      const emotionalGoal = planAny.emotional_goal || ''
-      const functionTag = planAny.function || planAny.function_tag || ''
-      const endingType = planAny.ending_type || '自然收尾'
 
       const messages = [
-        { role: 'system' as const, content: CHAPTER_SYSTEM },
+        { role: 'system' as const, content: buildExecutionConstraints(styleContext, personalityContext) + '\n\n' + CHAPTER_SYSTEM },
         { role: 'user' as const, content: CHAPTER_USER(
           project.title, outlineSummary, currentChapter, plan.title,
           plan.summary || '', plan.characters || [], plan.key_events || [],
           plan.estimated_words || 3000,
-          emotionalGoal, functionTag, endingType,
-          styleDesc, plotSummary, characterState, prevExcerpt, disassemblyContext
+          planAny.emotional_goal || planAny.emotional_arc || '', planAny.function || '', planAny.ending_type || '自然收尾',
+          styleContext, plotSummary, prevExcerpt, '',
+          canonFactsContext, personalityContext,
+          plan.plot_beats, plan.emotional_arc, planAny.cool_moment,
+          plan.forbidden, plan.scene_count, plan.max_info_reveal, plan.emotion_cap,
+          planAny.opening_hook, planAny.closing_hook,
         )},
       ]
-      const reply = await window.electronAPI.aiChat(messages, '上下文更新')
+      const reply = await window.electronAPI.aiChat(messages, '正文生成')
       setContent(reply)
       showToast('success', `第 ${currentChapter} 章生成完成！`)
       await saveChapter(currentChapter, plan.title, reply)
@@ -219,6 +374,7 @@ export default function ChapterEditor() {
   }
 
   const plan = chapterPlans.find(p => p.chapter_number === currentChapter) as any
+  const planAny = plan || {}
   if (!loaded) return <div className="flex justify-center py-24 text-text-secondary">加载中...</div>
   if (!project) return null
 
@@ -261,22 +417,77 @@ export default function ChapterEditor() {
         </div>
 
         <ReferenceSelector
-          primaryStyleId={primaryStyleId} auxiliaryStyleIds={auxiliaryStyleIds} disassemblyIds={disassemblyIds}
-          onChange={(refs) => { setPrimaryStyleId(refs.primaryStyleId); setAuxiliaryStyleIds(refs.auxiliaryStyleIds); setDisassemblyIds(refs.disassemblyIds) }}
+          primaryStyleId={primaryStyleId} auxiliaryStyleIds={auxiliaryStyleIds} disassemblyIds={[]}
+          onChange={(refs) => { setPrimaryStyleId(refs.primaryStyleId); setAuxiliaryStyleIds(refs.auxiliaryStyleIds) }}
         />
 
+        {/* 人格库选择器 */}
+        {personalityProjects.length > 0 && (
+          <div className="bg-white rounded-card border border-border overflow-hidden mb-4">
+            <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+              <span>🧠</span>
+              <span className="text-sm text-text-secondary">人格库（角色说话方式、意象、怪癖材料池）</span>
+            </div>
+            <div className="px-4 py-2 space-y-1">
+              {personalityProjects.filter(p => {
+                const d = p.personality_data as any
+                return !!(d?.emotion || d?.imagery || d?.dialogue || d?.private_imagery || d?.emotional_quirks)
+              }).map(p => {
+                const isPrimary = primaryPersonalityId === p.id
+                return (
+                  <div key={p.id} className="flex items-center gap-1.5 text-sm py-0.5">
+                    <input type="checkbox" checked={isPrimary}
+                      onChange={() => {
+                        if (!isPrimary) setAuxPersonalityIds(prev => prev.filter(x => x !== p.id))
+                        setPrimaryPersonalityId(isPrimary ? null : p.id)
+                      }} className="accent-primary" />
+                    <span className="flex-1 text-text-main">{p.name}</span>
+                    <input type="checkbox" checked={auxPersonalityIds.includes(p.id)}
+                      onChange={() => {
+                        if (isPrimary) setPrimaryPersonalityId(null)
+                        setAuxPersonalityIds(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])
+                      }} className="accent-primary ml-2" />
+                    <span className="text-text-placeholder">辅</span>
+                  </div>
+                )
+              })}
+              <p className="text-xs text-text-placeholder mt-1">☑ 主人格（单选）· ☑ 辅人格（多选）——AI将从中取角色说话方式和意象</p>
+            </div>
+          </div>
+        )}
+
         {/* 去AI味面板 */}
-        {content && <DeslopPanel content={content} onApply={(newContent) => { setContent(newContent); handleManualSave() }} />}
+        {content && <DeslopPanel content={content} onApply={(newContent) => { setContent(newContent); handleManualSave() }}
+          styleContext={buildStyleContext()}
+          personalityContext={buildPersonalityContext()}
+          forbiddenContext={(chapterPlans.find(p => p.chapter_number === currentChapter)?.forbidden || []).join('；')}
+          projectId={Number(id)}
+          chapterNum={currentChapter}
+        />}
 
         {plan && (
           <div className="bg-primary-light/30 rounded-card border border-primary/10 p-3 mb-3">
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
-              <span><span className="text-text-placeholder">功能：</span>{(plan as any).function || (plan as any).function_tag || '推进主线'}</span>
-              {(plan as any).emotional_goal && <span><span className="text-text-placeholder">情绪：</span>{(plan as any).emotional_goal}</span>}
+              <span><span className="text-text-placeholder">功能：</span>{planAny.function || planAny.function_tag || '推进主线'}</span>
+              {(planAny.emotional_goal || planAny.emotional_arc) && <span><span className="text-text-placeholder">情绪：</span>{planAny.emotional_goal || planAny.emotional_arc}</span>}
               <span><span className="text-text-placeholder">概要：</span>{plan.summary}</span>
-              <span><span className="text-text-placeholder">人物：</span>{plan.characters.join('、')}</span>
+              <span><span className="text-text-placeholder">人物：</span>{(plan.characters || []).join('、')}</span>
               <span><span className="text-text-placeholder">字数：</span>{plan.estimated_words}字</span>
+              {plan.scene_count && <span><span className="text-text-placeholder">场景：</span>{plan.scene_count}个</span>}
+              {plan.forbidden && plan.forbidden.length > 0 && (
+                <span><span className="text-text-placeholder">⛔ 禁区：</span>{plan.forbidden.slice(0, 3).join('；')}</span>
+              )}
             </div>
+            {plan.plot_beats && plan.plot_beats.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-text-secondary cursor-pointer">情节点序列（{plan.plot_beats.length}条）</summary>
+                <ol className="text-xs text-text-secondary mt-1 pl-4 list-decimal">
+                  {plan.plot_beats.map((b: string, i: number) => (
+                    <li key={i} className="leading-relaxed">{b}</li>
+                  ))}
+                </ol>
+              </details>
+            )}
           </div>
         )}
 
