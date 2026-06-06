@@ -4,12 +4,88 @@ import Modal from '../common/Modal'
 import { showToast } from '../common/Toast'
 import InlineEdit from '../common/InlineEdit'
 import { useProjectStore } from '../../store/projectStore'
+import { IDEA_SYSTEM, IDEA_USER, GOLDEN_THREE_SYSTEM, GOLDEN_THREE_USER, REVERSE_OUTLINE_SYSTEM, REVERSE_OUTLINE_USER } from '../../services/generator'
+import * as trackerService from '../../services/trackerService'
 
 export default function ProjectList() {
   const [modalOpen, setModalOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [creating, setCreating] = useState(false)
+
+  // 黄金三章速写
+  const [goldenModalOpen, setGoldenModalOpen] = useState(false)
+  const [goldenInput, setGoldenInput] = useState('')
+  const [goldenLoading, setGoldenLoading] = useState(false)
+  const [goldenStep, setGoldenStep] = useState('')
+
+  const handleGoldenThree = async () => {
+    if (!goldenInput.trim()) { showToast('error', '请输入灵感描述'); return }
+    if (!window.electronAPI) { showToast('error', '请在桌面应用中运行'); return }
+    setGoldenLoading(true)
+    try {
+      // Step 1: 生成脑洞
+      setGoldenStep('正在生成创意概念...')
+      const ideaReply = await window.electronAPI.aiChat([
+        { role: 'system', content: IDEA_SYSTEM },
+        { role: 'user', content: IDEA_USER(goldenInput.trim()) },
+      ], '灵感脑洞')
+      const jm = ideaReply.match(/\{[\s\S]*\}/)
+      if (!jm) { showToast('error', '创意生成失败'); setGoldenLoading(false); return }
+      const ideaData = JSON.parse(jm[0])
+
+      // Step 2: 创建项目（用梗概作书名）
+      const projectTitle = (ideaData.hook || goldenInput).slice(0, 30)
+      const result = await window.electronAPI.db.run(
+        'INSERT INTO novel_projects (title, description) VALUES (?, ?)',
+        [projectTitle, `灵感：${goldenInput.trim().slice(0, 200)}`]
+      )
+      const projectId = result.lastInsertRowid
+      await useProjectStore.getState().load()
+
+      // Step 3: 生成黄金三章
+      setGoldenStep('正在写黄金三章...')
+      const goldenReply = await window.electronAPI.aiChat([
+        { role: 'system', content: GOLDEN_THREE_SYSTEM },
+        { role: 'user', content: GOLDEN_THREE_USER(ideaData) },
+      ], '黄金三章')
+      const parts = goldenReply.split(/===\s*第\d+章\s*===/).filter(Boolean)
+      const chapterTexts: string[] = []
+      for (let i = 0; i < Math.min(parts.length, 3); i++) {
+        const content = parts[i].trim()
+        if (content) {
+          chapterTexts.push(content)
+          await window.electronAPI.db.run(
+            'INSERT INTO chapters (project_id, chapter_number, title, content, word_count, status) VALUES (?,?,?,?,?,?)',
+            [projectId, i + 1, `第${i + 1}章`, content, content.length, 'generated']
+          )
+        }
+      }
+
+      // Step 4: 反向提取大纲
+      setGoldenStep('正在反向提取大纲...')
+      const outlineReply = await window.electronAPI.aiChat([
+        { role: 'system', content: REVERSE_OUTLINE_SYSTEM },
+        { role: 'user', content: REVERSE_OUTLINE_USER(ideaData, chapterTexts) },
+      ], '反向大纲')
+      await window.electronAPI.db.run(
+        'INSERT INTO outlines (project_id, content, version) VALUES (?,?,?)',
+        [projectId, outlineReply, 1]
+      )
+
+      // Step 5: 提取总表
+      setGoldenStep('正在提取角色和事件...')
+      await trackerService.extractMasterFromOutline(projectId, outlineReply)
+
+      setGoldenModalOpen(false)
+      setGoldenInput('')
+      setGoldenStep('')
+      showToast('success', '黄金三章已生成！')
+      navigate(`/project/${projectId}/workspace`)
+    } catch (e: any) {
+      showToast('error', '生成失败：' + (e.message || '未知'))
+    } finally { setGoldenLoading(false) }
+  }
 
   const navigate = useNavigate()
   const { projects, loaded, load, create, remove } = useProjectStore()
@@ -64,12 +140,20 @@ export default function ProjectList() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl text-text-main">我的小说</h1>
-        <button
-          onClick={() => setModalOpen(true)}
-          className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors"
-        >
-          + 新建项目
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setGoldenModalOpen(true)}
+            className="px-4 py-2 border border-primary text-primary rounded-btn hover:bg-primary/5 transition-colors"
+          >
+            ✨ 灵感速写
+          </button>
+          <button
+            onClick={() => setModalOpen(true)}
+            className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors"
+          >
+            + 新建项目
+          </button>
+        </div>
       </div>
 
       {/* 项目列表 或 空状态 */}
@@ -175,6 +259,56 @@ export default function ProjectList() {
 
           <p className="text-sm text-text-secondary">
             💡 创建项目后，你可以选择风格库，然后按「大纲 → 细纲 → 章节」的顺序生成小说。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 灵感速写弹窗 */}
+      <Modal
+        open={goldenModalOpen}
+        title="✨ 灵感速写 — 一键生成黄金三章"
+        onClose={() => { setGoldenModalOpen(false); setGoldenInput(''); setGoldenStep('') }}
+        footer={
+          <>
+            <button
+              onClick={() => { setGoldenModalOpen(false); setGoldenInput(''); setGoldenStep('') }}
+              className="px-4 py-2 border border-border-input text-text-secondary rounded-btn hover:bg-bg-secondary transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleGoldenThree}
+              disabled={goldenLoading}
+              className="px-4 py-2 bg-primary text-white rounded-btn hover:bg-primary-hover transition-colors disabled:opacity-50"
+            >
+              {goldenLoading ? '⏳ 生成中...' : '📖 生成黄金三章'}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <div>
+            <label className="block text-base text-text-main mb-2">灵感描述 *</label>
+            <textarea
+              value={goldenInput}
+              onChange={(e) => setGoldenInput(e.target.value)}
+              placeholder="输入一句话灵感，如：一个能看见死亡倒计时的程序员，某天发现自己的倒计时停了…"
+              rows={4}
+              autoFocus
+              className="w-full px-3 py-2 border border-border-input rounded-btn text-base resize-none
+                         focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/20
+                         placeholder:text-text-placeholder"
+            />
+          </div>
+          {goldenLoading && goldenStep && (
+            <div className="flex items-center gap-2 text-sm text-text-secondary">
+              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              {goldenStep}
+            </div>
+          )}
+          <p className="text-sm text-text-secondary">
+            💡 AI 将依次完成：创意概念 → 黄金三章正文 → 反向提取大纲。<br />
+            完成后自动创建项目并进入工作台。
           </p>
         </div>
       </Modal>
